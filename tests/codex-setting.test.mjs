@@ -271,6 +271,7 @@ test("command applies Priority only to the selected Codex model and restores bra
   });
   const events = new Map();
   let command;
+  let shortcut;
   let component;
   let onMenuOpen;
   let branch = [];
@@ -284,6 +285,10 @@ test("command applies Priority only to the selected Codex model and restores bra
     registerCommand(name, options) {
       assert.equal(name, "codex-setting");
       command = options;
+    },
+    registerShortcut(key, options) {
+      assert.equal(key, "super+shift+f");
+      shortcut = options;
     },
     appendEntry(customType, data) {
       if (failAppend) throw new Error("cannot write session");
@@ -330,6 +335,26 @@ test("command applies Priority only to the selected Codex model and restores bra
   component.handleInput(space);
   assert.deepEqual(request({ payload }, ctx), { ...payload, service_tier: "priority" });
   assert.equal(statuses.get("codex-setting"), "Codex Fast");
+  const enabledBranch = [...branch];
+  for (const otherModel of [
+    { ...model, provider: "anthropic", api: "anthropic-messages" },
+    { ...model, provider: "openai", api: "openai-responses" },
+    { ...model, provider: "custom-openai" },
+    { ...model, api: "openai-responses" },
+    undefined,
+  ]) {
+    ctx.model = otherModel;
+    events.get("model_select")({ model: otherModel }, ctx);
+    assert.equal(statuses.has("codex-setting"), false);
+    assert.equal(request({ payload }, ctx), undefined);
+  }
+  await events.get("session_start")({}, ctx);
+  assert.equal(statuses.has("codex-setting"), false);
+  ctx.model = model;
+  events.get("model_select")({ model }, ctx);
+  assert.equal(statuses.get("codex-setting"), "Codex Fast");
+  assert.equal(request({ payload }, ctx).service_tier, "priority");
+  assert.deepEqual(branch, enabledBranch);
   assert.equal(payload.service_tier, "auto");
   assert.equal(request({ payload }, { ...ctx, model: { ...model, provider: "openai" } }), undefined);
   assert.equal(request({ payload }, { ...ctx, model: { ...model, api: "openai-responses" } }), undefined);
@@ -355,7 +380,7 @@ test("command applies Priority only to the selected Codex model and restores bra
   ctx.mode = "rpc";
   await command.handler("", ctx);
   assert.match(notices.at(-1)[0], /requires TUI/);
-  assert.deepEqual(statusColors, ["dim", "dim", "dim"]);
+  assert.deepEqual(statusColors, ["dim", "dim", "dim", "dim"]);
   ctx.mode = "tui";
   const originalBranch = [...branch];
   const first = await openMenu();
@@ -394,6 +419,42 @@ test("command applies Priority only to the selected Codex model and restores bra
   assert.equal(request({ payload }, ctx).service_tier, "priority");
   component.handleInput(escape);
   await fourth.completed;
+  await t.test("Cmd+Shift+F toggles session Fast, closes stale menus, and preserves defaults", async () => {
+    const opened = await openMenu();
+    const staleMenu = component;
+    shortcut.handler(ctx);
+    await opened.completed;
+    assert.deepEqual(branch.at(-1), { type: "custom", customType: "codex-setting", data: { fast: false } });
+    assert.equal(request({ payload }, ctx), undefined);
+    assert.equal(statuses.has("codex-setting"), false);
+    assert.deepEqual(notices.at(-1), ["Codex Fast: off", "info"]);
+    const afterToggle = [...branch];
+    staleMenu.handleInput(space);
+    assert.deepEqual(branch, afterToggle);
+    await events.get("session_start")({}, ctx);
+    assert.equal(request({ payload }, ctx), undefined);
+    assert.deepEqual(await readSettings(join(directory, "codex-setting.json")), { fast: true });
+    for (const mode of ["rpc", "print", "json"]) shortcut.handler({ ...ctx, mode });
+    assert.deepEqual(branch, afterToggle);
+    failAppend = true;
+    assert.throws(() => shortcut.handler(ctx), /cannot write session/);
+    assert.equal(request({ payload }, ctx), undefined);
+    assert.equal(statuses.has("codex-setting"), false);
+    assert.deepEqual(branch, afterToggle);
+    failAppend = false;
+    shortcut.handler(ctx);
+    assert.equal(request({ payload }, ctx).service_tier, "priority");
+    assert.equal(statuses.get("codex-setting"), "Codex Fast");
+    assert.deepEqual(notices.at(-1), ["Codex Fast: on", "info"]);
+    await events.get("session_tree")({}, ctx);
+    assert.equal(request({ payload }, ctx).service_tier, "priority");
+    const reopened = await openMenu();
+    assert.match(text(component), /Fast\s+on/);
+    assert.match(text(component), /Default: on/);
+    component.handleInput(escape);
+    await reopened.completed;
+    assert.deepEqual(await readSettings(join(directory, "codex-setting.json")), { fast: true });
+  });
   branch = [];
   const headlessCtx = {
     ...ctx,

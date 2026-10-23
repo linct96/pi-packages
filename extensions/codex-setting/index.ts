@@ -26,7 +26,14 @@ export default function (pi: ExtensionAPI) {
   function updateStatus(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
     // shortcut: setStatus stores ANSI text; reload after changing the Pi theme.
-    ctx.ui.setStatus(SESSION_ENTRY, fast ? ctx.ui.theme.fg("dim", "Codex Fast") : undefined);
+    const showFast = fast && ctx.model?.provider === "openai-codex" && ctx.model.api === "openai-codex-responses";
+    ctx.ui.setStatus(SESSION_ENTRY, showFast ? ctx.ui.theme.fg("dim", "Codex Fast") : undefined);
+  }
+
+  function applyFast(value: boolean, ctx: ExtensionContext) {
+    pi.appendEntry(SESSION_ENTRY, { fast: value });
+    fast = value;
+    updateStatus(ctx);
   }
 
   async function restore(ctx: ExtensionContext) {
@@ -58,7 +65,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));
   pi.on("session_shutdown", invalidateMenu);
-  pi.on("model_select", invalidateMenu);
+  pi.on("model_select", (_event, ctx) => {
+    invalidateMenu();
+    updateStatus(ctx);
+  });
 
   pi.on("before_provider_request", (event, ctx) => {
     const payload = event.payload;
@@ -74,6 +84,16 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     return { ...payload, service_tier: "priority" };
+  });
+
+  pi.registerShortcut("super+shift+f", {
+    description: "Toggle Codex Fast (Priority) mode",
+    handler: (ctx) => {
+      if (ctx.mode !== "tui") return;
+      invalidateMenu();
+      applyFast(!fast, ctx);
+      ctx.ui.notify(`Codex Fast: ${fast ? "on" : "off"}`, "info");
+    },
   });
 
   pi.registerCommand("codex-setting", {
@@ -109,9 +129,7 @@ export default function (pi: ExtensionAPI) {
             defaultFast,
             onApply(value) {
               checkCurrent();
-              pi.appendEntry(SESSION_ENTRY, { fast: value });
-              fast = value;
-              updateStatus(ctx);
+              applyFast(value, ctx);
             },
             async onSave(value, signal) {
               checkCurrent();

@@ -16,7 +16,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "pi": {
-    "extensions": ["./extensions/codex-setting/index.ts"]
+    "extensions": ["./extensions/codex-setting/index.ts", "./extensions/bar-cursor.ts"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

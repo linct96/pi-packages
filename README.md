@@ -45,11 +45,13 @@ Fast 沿用 Pi 原生设置列表的行内切换：
 - `Esc` 关闭菜单，不撤销已应用的切换。
 - 保存期间切换及重复保存会被忽略；`Esc` 请求取消保存，结束后保留菜单与当前会话值。
 
-快捷键沿用 Pi 的 `tui.select.*` 和 `app.models.save` 配置；如果你重绑了模型选择器的保存键，这里也会随之变化。
+菜单内快捷键沿用 Pi 的 `tui.select.*` 和 `app.models.save` 配置；如果你重绑了模型选择器的保存键，这里也会随之变化。
+
+在主输入框按 `Cmd+Shift+F`（Pi 键名 `super+shift+f`）可直接切换当前会话的 Fast 开关，无需打开菜单；会显示 `Codex Fast: on/off` 提示，并同步底栏状态，不修改全局默认值，从后续请求起生效。该快捷键不通过原生 `keybindings.json` 配置。终端需支持上报 `super` 修饰键（通常通过 Kitty 键盘协议），且不能被终端自身的搜索等快捷键拦截；不支持时仍可使用 `/codex-setting`。
 
 Fast 默认为 `off`。`on` 为当前选中的 `openai-codex` / `openai-codex-responses` 模型请求设置 `service_tier: "priority"`，不改变模型、推理强度或其他请求字段；`off` 不改写请求，不会清理其他配置或插件自行设置的 tier。不会改写其他 provider、不同模型或虚拟模型路由后的请求。
 
-启用后，Pi 底部状态栏显示 `Codex Fast`；关闭时移除。恢复会话和分支导航时同步显示状态。该标记表示开关已开启，不表示服务端已确认 Priority；非 Codex 请求仍不受影响。使用原生扩展状态接口，不替换现有底栏；自定义底栏需支持显示扩展状态。
+仅在 Fast 已启用且当前模型的 provider 为 `openai-codex`、API 为 `openai-codex-responses` 时，Pi 底部状态栏显示 `Codex Fast`；关闭或切换到其他模型时移除。切换模型、恢复会话和分支导航时同步显示状态；隐藏标记不会关闭 Fast，切回支持的 Codex 模型后自动恢复显示。该标记表示开关已开启，不表示服务端已确认 Priority；非 Codex 请求仍不受影响。使用原生扩展状态接口，不替换现有底栏；自定义底栏需支持显示扩展状态。
 
 标记使用当前主题的 `dim` 色，与原生底栏一致，不写死 RGB，也不额外加粗或放大。字号和字体继承终端配置，Pi 插件不能单独设置。状态接口缓存已着色文字，切换 Pi 主题后执行 `/reload` 刷新标记颜色。
 
@@ -70,15 +72,33 @@ Fast 默认为 `off`。`on` 为当前选中的 `openai-codex` / `openai-codex-re
 
 Priority 的可用性、速度与实际计费由账号及服务端决定；不保证加速，Pi 展示的费用估算不能代替账单。
 
+## 竖线光标
+
+`extensions/bar-cursor.ts` 将终端原生光标设为闪烁的竖线，并自动为当前 TUI 开启 Hardware cursor；退出、切换会话及重载时恢复启用前的值。不替换编辑器、不解析渲染结果，也不修改任何配置文件。
+
+无需手动开启 Hardware cursor。扩展保留一个不输出任何行的空 widget，在重绘时检查并重新开启 Hardware cursor，避免 `/reload` 回填保存设置后失效；不会增加界面行数，也没有定时轮询。会话结束时移除 widget 并恢复原值。启用扩展期间，设置面板关闭 Hardware cursor 也会在下次重绘时被重新开启。假光标的移除、字符宽度和输入法定位由 Pi 原生 TUI 处理；自定义编辑器也需使用 Pi 的原生光标标记。
+
+```bash
+# 加载整个包，或只加载光标扩展
+pi -e .
+pi -e ./extensions/bar-cursor.ts
+```
+
+若已安装 `@joyanhui/pi-ext-bar-cursor`，请先在 `pi config` 中禁用旧扩展，避免它继续接管编辑器。
+
+扩展仅在 TUI 模式且标准输出是 TTY 时写入 DECSCUSR 控制序列，不影响 print/JSON/RPC 输出。会话退出、切换及重载时恢复终端默认光标形状，而非精确还原此前形状；强制终止进程无法保证清理。终端需支持 DECSCUSR，实际形状与闪烁行为取决于终端实现。外部程序若修改光标形状，本扩展不会持续覆盖，下一次会话启动时重新应用。
+
 ## 目录约定
 
 ```text
 extensions/
+  bar-cursor.ts        # 会话内启用硬件光标、设置形状与退出清理
   codex-setting/
     index.ts           # /codex-setting 命令、会话状态与请求钩子
     menu.ts            # 原生设置列表与 Fast 行内切换
     settings.ts        # 全局默认值读写
 tests/
+  bar-cursor.test.mjs
   codex-setting.test.mjs
 package.json           # 包信息与 pi 资源清单
 pnpm-lock.yaml         # 固定开发依赖

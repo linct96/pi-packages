@@ -55,7 +55,7 @@ export function createSettingsMenu(
       {
         id: "fast",
         label: "Fast",
-        description: "Codex Priority mode. May increase usage costs.",
+        description: "Codex Priority mode. May increase usage costs. Press Cmd+Shift+F in the main input to toggle.",
         currentValue: value(options.fast),
         values: ["off", "on"],
       },
