@@ -74,9 +74,11 @@ Priority 的可用性、速度与实际计费由账号及服务端决定；不�
 
 ## 竖线光标
 
-`extensions/bar-cursor.ts` 将终端原生光标设为闪烁的竖线，并自动为当前 TUI 开启 Hardware cursor；退出、切换会话及重载时恢复启用前的值。不替换编辑器、不解析渲染结果，也不修改任何配置文件。
+`extensions/bar-cursor.ts` 仅将终端原生光标设为闪烁的竖线，不再开启、覆盖或恢复 Hardware cursor 设置；不替换编辑器、不挂载 widget，也不修改 Pi 的 `settings.json`。
 
-无需手动开启 Hardware cursor。扩展保留一个不输出任何行的空 widget，在重绘时检查并重新开启 Hardware cursor，避免 `/reload` 回填保存设置后失效；不会增加界面行数，也没有定时轮询。会话结束时移除 widget 并恢复原值。启用扩展期间，设置面板关闭 Hardware cursor 也会在下次重绘时被重新开启。假光标的移除、字符宽度和输入法定位由 Pi 原生 TUI 处理；自定义编辑器也需使用 Pi 的原生光标标记。
+首次在 TUI 中加载时，扩展提示在 `/settings` 中将 **Show hardware cursor** 设为 `true`（已开启则无需操作）。提示后创建独立标记 `~/.pi/agent/bar-cursor-notice-shown`，后续重启、切换会话及 `/reload` 不再重复提示；设置了 `PI_CODING_AGENT_DIR` 时标记存放在该目录。无法保存标记时会警告，下次启动可能再次提示；删除标记可重新显示提示，卸载重装不会自动清除标记。print/JSON/RPC 或非 TTY 模式不提示，也不创建标记。
+
+Hardware cursor 关闭时仍显示 Pi 的块状假光标，插件不会强制重新开启。开启后的假光标移除、字符宽度和输入法定位由 Pi 原生 TUI 处理；自定义编辑器也需使用 Pi 的原生光标标记。启动时竖线形状仍在 `session_start` 应用，若终端默认光标是块状，首帧仍可能短暂显示块状硬件光标；可将终端默认光标也设为竖线。
 
 ```bash
 # 加载整个包，或只加载光标扩展
@@ -92,7 +94,7 @@ pi -e ./extensions/bar-cursor.ts
 
 ```text
 extensions/
-  bar-cursor.ts        # 会话内启用硬件光标、设置形状与退出清理
+  bar-cursor.ts        # 首次开启提示、光标形状与退出清理
   codex-setting/
     index.ts           # /codex-setting 命令、会话状态与请求钩子
     menu.ts            # 原生设置列表与 Fast 行内切换

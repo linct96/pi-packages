@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { Container, CURSOR_MARKER, renderFakeCursor, TuiAltScreen, TuiMainScreen, VStack } from "@earendil-works/pi-tui";
 import barCursor from "../extensions/bar-cursor.ts";
 
-function setup(t, isTTY = true, showHardwareCursor = false, Renderer = TuiMainScreen) {
+async function setup(t) {
+  const directory = await mkdtemp(join(tmpdir(), "pi-bar-cursor-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const agentDir = join(directory, "agent");
   const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: isTTY });
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
   t.after(() => {
     if (descriptor) Object.defineProperty(process.stdout, "isTTY", descriptor);
     else delete process.stdout.isTTY;
@@ -15,142 +20,110 @@ function setup(t, isTTY = true, showHardwareCursor = false, Renderer = TuiMainSc
     writes.push(text);
     return true;
   });
-  const widgets = new Map();
-  const hardwareCursorChanges = [];
-  const tui = new Renderer({ hideCursor() {} }, showHardwareCursor);
-  t.mock.method(tui, "requestRender", () => {});
-  const setShowHardwareCursor = tui.setShowHardwareCursor.bind(tui);
-  t.mock.method(tui, "setShowHardwareCursor", (enabled) => {
-    hardwareCursorChanges.push(enabled);
-    setShowHardwareCursor(enabled);
-  });
-  const widgetContainer = new Container();
-  const editor = { render: () => [`输入${CURSOR_MARKER}${renderFakeCursor(" ")}`], invalidate() {} };
-  if (tui instanceof TuiAltScreen) {
-    tui.setLayoutRoot(new VStack([widgetContainer, editor]));
-  } else {
-    tui.addChild(widgetContainer);
-    tui.addChild(editor);
-  }
-  const ui = {
-    setWidget(key, content) {
-      if (content === undefined) widgets.delete(key);
-      else widgets.set(key, content(tui));
-      widgetContainer.clear();
-      for (const component of widgets.values()) widgetContainer.addChild(component);
-    },
-  };
+  const notifications = [];
+  const ui = { notify: (message, type) => notifications.push({ message, type }) };
   const handlers = new Map();
-  barCursor({ on: (event, handler) => handlers.set(event, handler) });
+  const load = () => {
+    handlers.clear();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      barCursor({ on: (event, handler) => handlers.set(event, handler) });
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  };
+  load();
   return {
+    agentDir,
+    reload: load,
     writes,
-    widgets,
-    hardwareCursorChanges,
-    applySavedSettings: (enabled) => tui.setShowHardwareCursor(enabled),
-    render: () => tui.resolveFakeCursors(tui.render(80)),
-    get showHardwareCursor() {
-      return tui.getShowHardwareCursor();
-    },
+    notifications,
     start: (mode = "tui") => handlers.get("session_start")({}, { mode, ui }),
     shutdown: () => handlers.get("session_shutdown")(),
   };
 }
 
-test("loading is inert; TUI startup sets a blinking bar and shutdown resets once", (t) => {
-  const cursor = setup(t);
+const notice = {
+  message: "竖线光标：请在 /settings 中将 Show hardware cursor 设为 true；若已开启，无需操作。",
+  type: "info",
+};
+
+test("loading is inert; TUI startup sets only the shape and shows one setup notice", async (t) => {
+  const cursor = await setup(t);
   assert.deepEqual(cursor.writes, []);
-  assert.deepEqual(cursor.hardwareCursorChanges, []);
+  assert.deepEqual(cursor.notifications, []);
+  await assert.rejects(readdir(cursor.agentDir), { code: "ENOENT" });
   cursor.shutdown();
   assert.deepEqual(cursor.writes, []);
-  cursor.start();
-  cursor.start();
+  await mkdir(cursor.agentDir);
+  const settingsPath = join(cursor.agentDir, "settings.json");
+  const settings = '{"showHardwareCursor":false,"other":"keep"}\n';
+  await writeFile(settingsPath, settings);
+  await cursor.start();
+  await cursor.start();
   assert.deepEqual(cursor.writes, ["\x1b[5 q"]);
-  assert.equal(cursor.showHardwareCursor, true);
-  assert.deepEqual(cursor.hardwareCursorChanges, [true]);
-  assert.equal(cursor.widgets.size, 1);
-  assert.deepEqual(cursor.render(), [`输入${CURSOR_MARKER} `]);
-  assert.deepEqual(cursor.hardwareCursorChanges, [true]);
+  assert.deepEqual(cursor.notifications, [notice]);
+  assert.deepEqual((await readdir(cursor.agentDir)).sort(), ["bar-cursor-notice-shown", "settings.json"]);
   cursor.shutdown();
-  assert.equal(cursor.widgets.size, 0);
   cursor.shutdown();
   assert.deepEqual(cursor.writes, ["\x1b[5 q", "\x1b[0 q"]);
-  assert.equal(cursor.showHardwareCursor, false);
-  assert.deepEqual(cursor.hardwareCursorChanges, [true, false]);
+  assert.equal(await readFile(settingsPath, "utf8"), settings);
 });
 
-test("an already enabled hardware cursor stays enabled after cleanup", (t) => {
-  const cursor = setup(t, true, true);
-  cursor.start();
-  assert.equal(cursor.showHardwareCursor, true);
-  cursor.shutdown();
-  assert.equal(cursor.showHardwareCursor, true);
-  assert.deepEqual(cursor.hardwareCursorChanges, [true, true]);
-});
-
-test("non-TUI sessions never write terminal escapes, even with a TTY", (t) => {
-  const cursor = setup(t);
+test("non-TUI and non-TTY sessions have no effects and do not consume the notice", async (t) => {
+  const cursor = await setup(t);
   for (const mode of ["print", "json", "rpc"]) {
-    cursor.start(mode);
+    await cursor.start(mode);
+    cursor.shutdown();
+  }
+  for (const isTTY of [false, undefined]) {
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: isTTY });
+    await cursor.start();
     cursor.shutdown();
   }
   assert.deepEqual(cursor.writes, []);
-  assert.deepEqual(cursor.hardwareCursorChanges, []);
+  assert.deepEqual(cursor.notifications, []);
+  await assert.rejects(readdir(cursor.agentDir), { code: "ENOENT" });
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+  await cursor.start();
+  assert.deepEqual(cursor.notifications, [notice]);
 });
 
-for (const isTTY of [false, undefined]) {
-  test(`redirected output is untouched when isTTY is ${isTTY}`, (t) => {
-    const cursor = setup(t, false);
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: isTTY });
-    cursor.start();
-    cursor.shutdown();
-    assert.deepEqual(cursor.writes, []);
-    assert.deepEqual(cursor.hardwareCursorChanges, []);
-  });
-}
-
-test("session replacement or reload can apply the bar again after cleanup", (t) => {
-  const cursor = setup(t);
-  cursor.start();
+test("session replacement and a fresh extension runtime do not repeat the notice", async (t) => {
+  const cursor = await setup(t);
+  await cursor.start();
   cursor.shutdown();
-  cursor.start();
+  await cursor.start();
   cursor.shutdown();
   assert.deepEqual(cursor.writes, ["\x1b[5 q", "\x1b[0 q", "\x1b[5 q", "\x1b[0 q"]);
-  assert.deepEqual(cursor.hardwareCursorChanges, [true, false, true, false]);
+  assert.deepEqual(cursor.notifications, [notice]);
+  cursor.writes.length = 0;
+  cursor.notifications.length = 0;
+  cursor.reload();
+  await cursor.start();
+  assert.deepEqual(cursor.writes, ["\x1b[5 q"]);
+  assert.deepEqual(cursor.notifications, []);
+  cursor.shutdown();
 });
 
-for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
-  test(`/reload survives saved-setting backfill with ${Renderer.name}`, (t) => {
-    const cursor = setup(t, true, false, Renderer);
-    cursor.start();
-    cursor.shutdown();
-    cursor.start();
-    // The host reapplies showHardwareCursor=false AFTER the replacement's session_start.
-    cursor.applySavedSettings(false);
-    assert.equal(cursor.showHardwareCursor, false);
-    assert.deepEqual(cursor.render(), [`输入${CURSOR_MARKER} `]);
-    assert.equal(cursor.showHardwareCursor, true);
-    assert.deepEqual(cursor.hardwareCursorChanges, [true, false, true, false, true]);
-    for (let i = 0; i < 3; i++) cursor.render();
-    assert.deepEqual(cursor.hardwareCursorChanges, [true, false, true, false, true]);
-    const staleWidget = cursor.widgets.get("bar-cursor");
-    cursor.shutdown();
-    assert.equal(cursor.widgets.size, 0);
-    assert.equal(cursor.showHardwareCursor, false);
-    cursor.start();
-    cursor.applySavedSettings(false);
-    assert.deepEqual(staleWidget.render(80), []);
-    assert.equal(cursor.showHardwareCursor, false);
-    cursor.render();
-    assert.equal(cursor.showHardwareCursor, true);
-    cursor.shutdown();
-  });
-}
-
-test("cleanup does not write escapes if output is no longer a TTY", (t) => {
-  const cursor = setup(t);
-  cursor.start();
+test("cleanup does not write escapes if output is no longer a TTY", async (t) => {
+  const cursor = await setup(t);
+  await cursor.start();
   Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
   cursor.shutdown();
   assert.deepEqual(cursor.writes, ["\x1b[5 q"]);
-  assert.equal(cursor.showHardwareCursor, false);
+});
+
+test("notice persistence failure warns but still explains setup and preserves cleanup", async (t) => {
+  const cursor = await setup(t);
+  await writeFile(cursor.agentDir, "not a directory");
+  await cursor.start();
+  assert.equal(cursor.notifications[0].type, "warning");
+  assert.match(cursor.notifications[0].message, /无法记录竖线光标提示状态/);
+  assert.deepEqual(cursor.notifications[1], notice);
+  assert.equal(await readFile(cursor.agentDir, "utf8"), "not a directory");
+  cursor.shutdown();
+  assert.deepEqual(cursor.writes, ["\x1b[5 q", "\x1b[0 q"]);
 });
