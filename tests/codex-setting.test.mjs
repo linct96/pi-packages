@@ -328,13 +328,20 @@ test("command applies Priority only to the selected Codex model and restores bra
   }
   const request = events.get("before_provider_request");
   const payload = { model: "gpt-test", input: [], service_tier: "auto" };
+  for (const data of [undefined, null, true, 1, "fast", [], {}, { fast: "true" }, { fast: 1 }, { fast: null }]) {
+    branch = [{ type: "custom", customType: "codex-setting", data }];
+    await events.get("session_start")({}, ctx);
+    assert.equal(request({ payload }, ctx), undefined);
+    assert.equal(statuses.has("codex-setting"), false);
+  }
+  branch = [];
   await events.get("session_start")({}, ctx);
   assert.equal(request({ payload }, ctx), undefined);
   assert.equal(statuses.has("codex-setting"), false);
   await openMenu();
   component.handleInput(space);
   assert.deepEqual(request({ payload }, ctx), { ...payload, service_tier: "priority" });
-  assert.equal(statuses.get("codex-setting"), "Codex Fast");
+  assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
   const enabledBranch = [...branch];
   for (const otherModel of [
     { ...model, provider: "anthropic", api: "anthropic-messages" },
@@ -352,17 +359,19 @@ test("command applies Priority only to the selected Codex model and restores bra
   assert.equal(statuses.has("codex-setting"), false);
   ctx.model = model;
   events.get("model_select")({ model }, ctx);
-  assert.equal(statuses.get("codex-setting"), "Codex Fast");
+  assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
   assert.equal(request({ payload }, ctx).service_tier, "priority");
   assert.deepEqual(branch, enabledBranch);
   assert.equal(payload.service_tier, "auto");
   assert.equal(request({ payload }, { ...ctx, model: { ...model, provider: "openai" } }), undefined);
   assert.equal(request({ payload }, { ...ctx, model: { ...model, api: "openai-responses" } }), undefined);
   assert.equal(request({ payload: { model: "another-model" } }, ctx), undefined);
-  assert.equal(request({ payload: null }, ctx), undefined);
+  for (const invalidPayload of [undefined, null, false, true, 0, 1, "gpt-test", [], {}, { model: null }]) {
+    assert.equal(request({ payload: invalidPayload }, ctx), undefined);
+  }
   await events.get("session_start")({}, ctx);
   assert.equal(request({ payload }, ctx).service_tier, "priority");
-  assert.equal(statuses.get("codex-setting"), "Codex Fast");
+  assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
   branch = [];
   await events.get("session_tree")({}, ctx);
   assert.equal(request({ payload }, ctx), undefined);
@@ -370,7 +379,7 @@ test("command applies Priority only to the selected Codex model and restores bra
   await saveSettings(join(directory, "codex-setting.json"), true, false, new AbortController().signal);
   await events.get("session_start")({}, ctx);
   assert.equal(request({ payload }, ctx).service_tier, "priority");
-  assert.equal(statuses.get("codex-setting"), "Codex Fast");
+  assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
   await openMenu();
   component.handleInput(space);
   assert.equal(statuses.has("codex-setting"), false);
@@ -444,7 +453,7 @@ test("command applies Priority only to the selected Codex model and restores bra
     failAppend = false;
     shortcut.handler(ctx);
     assert.equal(request({ payload }, ctx).service_tier, "priority");
-    assert.equal(statuses.get("codex-setting"), "Codex Fast");
+    assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
     assert.deepEqual(notices.at(-1), ["Codex Fast: on", "info"]);
     await events.get("session_tree")({}, ctx);
     assert.equal(request({ payload }, ctx).service_tier, "priority");

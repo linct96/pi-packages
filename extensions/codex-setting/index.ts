@@ -27,7 +27,7 @@ export default function (pi: ExtensionAPI) {
     if (ctx.mode !== "tui") return;
     // shortcut: setStatus stores ANSI text; reload after changing the Pi theme.
     const showFast = fast && ctx.model?.provider === "openai-codex" && ctx.model.api === "openai-codex-responses";
-    ctx.ui.setStatus(SESSION_ENTRY, showFast ? ctx.ui.theme.fg("dim", "Codex Fast") : undefined);
+    ctx.ui.setStatus(SESSION_ENTRY, showFast ? ctx.ui.theme.fg("dim", "| Codex Fast |") : undefined);
   }
 
   function applyFast(value: boolean, ctx: ExtensionContext) {
@@ -41,7 +41,7 @@ export default function (pi: ExtensionAPI) {
     const version = menuVersion;
     let loadedDefault = false;
     try {
-      loadedDefault = (await readSettings(settingsPath)).fast;
+      ({ fast: loadedDefault } = await readSettings(settingsPath));
     } catch (error) {
       if (version !== menuVersion) return;
       ctx.ui.notify(
@@ -119,7 +119,7 @@ export default function (pi: ExtensionAPI) {
       }
       let close: (() => void) | undefined;
       try {
-        let expectedFast = (await readSettings(settingsPath)).fast;
+        let { fast: expectedFast } = await readSettings(settingsPath);
         checkCurrent();
         defaultFast = expectedFast;
         await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
