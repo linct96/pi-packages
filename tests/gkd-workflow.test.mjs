@@ -3,7 +3,9 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import test from "node:test";
 import gkdWorkflow from "../extensions/gkd-workflow/index.ts";
 import { parseRouteResponse, ROUTE_POLICY } from "../extensions/gkd-workflow/judge-route/index.ts";
@@ -80,8 +82,12 @@ function router() {
 test("package exposes GKD workflow, publishing skill and debug command", async () => {
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.ok(manifest.pi.extensions.includes("./extensions/gkd-workflow/index.ts"));
-  assert.deepEqual(manifest.pi.skills, ["./skills"]);
-  assert.ok(manifest.files.includes("skills"));
+  assert.deepEqual(manifest.pi.skills, ["./extensions/gkd-workflow/gkd-pr"]);
+  assert.ok(manifest.files.includes("extensions"));
+  const skillDir = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-pr/", import.meta.url));
+  const discovered = loadSkillsFromDir({ dir: skillDir, source: "path" });
+  assert.deepEqual(discovered.diagnostics, []);
+  assert.deepEqual(discovered.skills.map((skill) => [skill.name, skill.filePath]), [["gkd-pr", join(skillDir, "SKILL.md")]]);
   const app = router();
   assert.deepEqual([...app.commands.keys()], ["gkd-judge-route", "gkd", "gkd-settings"]);
   for (const name of ["gkd", "gkd-settings"]) {
@@ -99,7 +105,8 @@ test("package exposes GKD workflow, publishing skill and debug command", async (
 
 test("GKD handoff uses validated FAST / STANDARD routes and restores normal tools before implementation", async () => {
   const instructions = await readFile(new URL("../extensions/gkd-workflow/execute.md", import.meta.url), "utf8");
-  const skill = await readFile(new URL("../skills/gkd-pr/SKILL.md", import.meta.url), "utf8");
+  const skillPath = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-pr/SKILL.md", import.meta.url));
+  const skill = await readFile(skillPath, "utf8");
   for (const route of ["FAST", "STANDARD", "DIRECT", "NONE"]) {
     const app = router();
     await app.commands.get("gkd").handler("实现一个功能", app.ctx);
@@ -120,6 +127,7 @@ test("GKD handoff uses validated FAST / STANDARD routes and restores normal tool
     assert.ok(started.systemPrompt.includes(instructions.trim()));
     assert.ok(started.systemPrompt.includes("Validated GKD route: " + route));
     assert.equal(started.systemPrompt.includes(skill.trim()), route === "FAST" || route === "STANDARD");
+    assert.equal(started.systemPrompt.includes(`GKD publication skill: ${skillPath}`), route === "FAST" || route === "STANDARD");
     assert.equal(app.event("tool_call", { toolName: "write", input: {} }), undefined);
     assert.equal(app.event("before_agent_start", { messageType: "user", prompt: app.messages[1], systemPrompt: "base" }), undefined);
   }
@@ -151,9 +159,9 @@ test("GKD route errors and aborts never trigger execution or PR publishing", asy
 });
 
 test("PR publication skill supplies both route-specific templates and safe remote checks", async () => {
-  const skill = await readFile(new URL("../skills/gkd-pr/SKILL.md", import.meta.url), "utf8");
-  const fast = await readFile(new URL("../skills/gkd-pr/references/FAST.md", import.meta.url), "utf8");
-  const standard = await readFile(new URL("../skills/gkd-pr/references/STANDARD.md", import.meta.url), "utf8");
+  const skill = await readFile(new URL("../extensions/gkd-workflow/gkd-pr/SKILL.md", import.meta.url), "utf8");
+  const fast = await readFile(new URL("../extensions/gkd-workflow/gkd-pr/references/FAST.md", import.meta.url), "utf8");
+  const standard = await readFile(new URL("../extensions/gkd-workflow/gkd-pr/references/STANDARD.md", import.meta.url), "utf8");
   for (const phrase of ["judge-route", "GitHub", "GitLab", "gh pr create", "glab mr create", "authentication", "Draft"]) {
     assert.ok(skill.toLowerCase().includes(phrase.toLowerCase()), phrase);
   }

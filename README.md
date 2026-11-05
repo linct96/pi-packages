@@ -169,10 +169,10 @@ pi -e ./extensions/gkd-workflow/index.ts
 
 ## GKD PR / MR Skill
 
-`skills/gkd-pr/SKILL.md` 随 Pi Package 自动发现，亦可通过 `/skill:gkd-pr` 单独调用。它提供 FAST、STANDARD 两套 PR / MR 正文模板：
+`extensions/gkd-workflow/gkd-pr/SKILL.md` 与 `/gkd` 的 `index.ts` 入口同级，通过 Pi Package 的 `pi.skills` 清单发现，亦可通过 `/skill:gkd-pr` 单独调用。它提供 FAST、STANDARD 两套 PR / MR 正文模板：
 
-- `skills/gkd-pr/references/FAST.md`：变更摘要、实际验证和已知风险。
-- `skills/gkd-pr/references/STANDARD.md`：额外记录背景、STANDARD 升级依据、重要设计权衡、分阶段实施及回滚方案。
+- `extensions/gkd-workflow/gkd-pr/references/FAST.md`：变更摘要、实际验证和已知风险。
+- `extensions/gkd-workflow/gkd-pr/references/STANDARD.md`：额外记录背景、STANDARD 升级依据、重要设计权衡、分阶段实施及回滚方案。
 
 默认流程：
 
@@ -217,12 +217,11 @@ extensions/
       index.ts         # 指令加载、调试命令、只读工具、安全校验与生命周期
       policy.md        # 分流原则、证据纪律与输出协议
       workflow.md      # 主 Agent 调查与结果提交步骤
-skills/
-  gkd-pr/
-    SKILL.md           # PR/MR 发布 Skill
-    references/
-      FAST.md          # FAST 变更正文
-      STANDARD.md      # STANDARD 设计、风险与验证正文
+    gkd-pr/
+      SKILL.md         # PR/MR 发布 Skill
+      references/
+        FAST.md        # FAST 变更正文
+        STANDARD.md    # STANDARD 设计、风险与验证正文
 tests/
   bar-cursor.test.mjs
   codex-setting.test.mjs
@@ -237,7 +236,7 @@ tsconfig.json          # 只做类型检查，不输出产物
 
 新增扩展时，在 `package.json` 的 `pi.extensions` 中显式列出入口，避免将辅助模块当作扩展加载。
 
-当前 `skills/` 已加入 `package.json` 的 `pi.skills` 与 `files` 发布清单。其他资源目录在需要时创建，并同步更新清单：
+`gkd-pr` 归属 `extensions/gkd-workflow/`，在 `package.json` 的 `pi.skills` 中显式列出技能目录，并随 `files` 中的 `extensions` 一起发布。其他资源目录在需要时创建，并同步更新清单：
 - `prompts/<name>.md`：可复用提示词。
 - `themes/<name>.json`：主题。
 

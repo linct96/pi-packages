@@ -41,7 +41,7 @@ type RawRoute = {
 export const ROUTE_POLICY = readFileSync(new URL("./policy.md", import.meta.url), "utf8").trim();
 const ROUTE_WORKFLOW = readFileSync(new URL("./workflow.md", import.meta.url), "utf8").trim();
 const EXECUTION_WORKFLOW = readFileSync(new URL("../execute.md", import.meta.url), "utf8").trim();
-const PR_SKILL_URL = new URL("../../../skills/gkd-pr/SKILL.md", import.meta.url);
+const PR_SKILL_URL = new URL("../gkd-pr/SKILL.md", import.meta.url);
 const PR_SKILL = readFileSync(PR_SKILL_URL, "utf8").trim();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
