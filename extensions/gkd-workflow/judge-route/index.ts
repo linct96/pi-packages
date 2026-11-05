@@ -417,7 +417,7 @@ export function registerJudgeRoute(pi: ExtensionAPI) {
   async function startRoute(args: string, ctx: ExtensionContext, mode: "debug" | "workflow") {
       const task = args.trim();
       if (!task) {
-        ctx.ui.notify(mode === "debug" ? "用法：/gkd-judge-route <任务提示词>" : "用法：/gkd <任务提示词>", "warning");
+        if (ctx.hasUI) ctx.ui.notify(mode === "debug" ? "用法：/gkd-judge-route <任务提示词>" : "用法：/gkd <任务提示词>", "warning");
         return;
       }
       if (active || !ctx.isIdle()) {
