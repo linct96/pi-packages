@@ -236,3 +236,12 @@ Pi 宿主提供的库放在 `peerDependencies`，不要放进 `dependencies` 或
 
 - [Extensions](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md)
 - [Pi Packages](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
+
+## Pull Request 模板
+
+仓库提供两套 PR 正文模板，按 GKD 开发分流选择：
+
+- **[FAST](https://github.com/linct96/pi-packages/compare/main...main?expand=1&template=FAST.md)**：默认开发流程，记录变更摘要、影响范围、已完成的验证及已知风险。无需为了填写模板而引入正式设计/审批流程。
+- **[STANDARD](https://github.com/linct96/pi-packages/compare/main...main?expand=1&template=STANDARD.md)**：有明确复杂度/风险触发项的开发任务，补充背景、方案权衡、设计决策、分阶段计划、兼容性/安全/迁移、验证与回滚。可先建 Draft PR。
+
+模板源码位于 `.github/PULL_REQUEST_TEMPLATE/`。创建 PR 时可在比较页 URL 加 `?template=FAST.md` 或 `?template=STANDARD.md`（已有查询参数则使用 `&template=...`）。上方链接打开模板入口，实际创建时仍需选择包含代码修改的 head 分支。路由判断以 `extensions/gkd-workflow/judge-route/policy.md` 为准；DIRECT / NONE 不属于开发 PR 模式。
