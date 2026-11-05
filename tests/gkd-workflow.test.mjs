@@ -80,7 +80,7 @@ function router() {
 test("package exposes GKD workflow, publishing skill and debug command", async () => {
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.ok(manifest.pi.extensions.includes("./extensions/gkd-workflow/index.ts"));
-  assert.deepEqual(manifest.pi.skills, ["./skills/gkd-pr"]);
+  assert.deepEqual(manifest.pi.skills, ["./skills"]);
   assert.ok(manifest.files.includes("skills"));
   const app = router();
   assert.deepEqual([...app.commands.keys()], ["gkd-judge-route", "gkd", "gkd-settings"]);
