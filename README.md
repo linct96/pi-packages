@@ -74,15 +74,15 @@ Priority 的可用性、速度与实际计费由账号及服务端决定；不�
 
 ## gkd-workflow
 
-- `/gkd`：工作流占位入口，具体流程尚未实现。
+- `/gkd <任务提示词>`：先调用主 Agent 的只读 `judge-route` 分类；分类成功后恢复正常工具，继续执行 DIRECT / FAST / STANDARD / NONE 对应流程。FAST / STANDARD 在产生可发布的改动且存在可用 GitHub / GitLab 远程仓库时，使用 `gkd-pr` Skill 生成 PR / MR。
 - `/gkd-settings`：全局个人设置占位入口，暂无可配置项。
 - `/gkd-judge-route <任务提示词>`：分流调试快捷入口，由当前主 Agent 只读调查并识别任务，不执行操作或开发、不创建计划或请求审批。
 
-后续个人设置将跨项目、跨会话共用，不提供项目级或会话级覆盖。目前不预设设置项，不读写配置文件；具体设置菜单与全局持久化随首个设置项实现。前两个占位命令仅显示通知，不调用模型。
+后续个人设置将跨项目、跨会话共用，不提供项目级或会话级覆盖。目前不预设设置项，不读写配置文件；具体设置菜单与全局持久化随首个设置项实现。`/gkd-settings` 目前仅显示通知，不调用模型；`/gkd` 则启动完整的分流与执行流程。
 
 ### 任务路由识别
 
-分流是 **GKD 主 Agent 工作流中的一个阶段**，不是扩展内部的独立模型请求。分流模块位于 `extensions/gkd-workflow/judge-route/`：`policy.md` 描述分流原则、证据纪律和输出协议，`workflow.md` 描述主 Agent 的调查与提交步骤；`index.ts` 加载这两份指令，负责命令／工具注册、只读权限、结果校验及取消恢复。Markdown 按模块路径加载，不依赖待调查项目的工作目录；修改后执行 `/reload` 生效。当前先提供调试入口，`/gkd` 完整工作流仍未实现，也不会拦截普通对话。
+分流是 **GKD 主 Agent 工作流中的一个阶段**，不是扩展内部的独立模型请求。分流模块位于 `extensions/gkd-workflow/judge-route/`：`policy.md` 描述分流原则、证据纪律和输出协议，`workflow.md` 描述主 Agent 的调查与提交步骤；`index.ts` 加载这两份指令，负责命令／工具注册、只读权限、结果校验及取消恢复。Markdown 按模块路径加载，不依赖待调查项目的工作目录；修改后执行 `/reload` 生效。`/gkd-judge-route` 仍仅供只读分流调试，不会执行任务；`/gkd` 在分类成功后才进入独立执行回合。默认不会拦截普通对话，必须手动使用 `/gkd` 启动。
 
 使用 `/gkd-judge-route`，例如：
 
@@ -119,13 +119,13 @@ DIRECT 表示无需开发流程，不是执行授权：执行前仍需核对目�
 
 对于开发任务，架构/职责/边界变化、跨模块行为或契约协调、关键技术权衡、兼容性破坏、安全边界、数据迁移、无法安全地一次完成和验证的分阶段实施，以及经必要调查确认存在、会实质改变预期行为、方案或影响范围的重要未决问题，都触发 STANDARD。一般资料不足不属于这种重要不确定性；开发风险等级不能仅因无法证明低风险而填为 medium/high。多个文件的机械修改不等于跨模块协调；修改类型、数据模型或兼容地添加可选字段也不单独构成硬触发，需看语义、契约和风险。普通的查看、修改、测试步骤不等于分阶段实施。不能用文件数、代码行数或臆测的风险独立升级。
 
-纯解释/咨询返回 NONE，不因出现认证、迁移等词语就成为开发任务；执行现成操作的请求不能归为 NONE。用户指定的模式只是偏好，不能替代 STANDARD 触发证据，也不能绕过已知风险的强制升级规则。发现关键证据缺失时明确记录缺什么，不编造源码、调用方或测试证据。与 BMAD 一样由主 Agent 执行工作流指令，但这里使用默认 FAST／明确触发才 STANDARD 的策略，不采用 BMAD 本地版本默认的代码行数阈值。本命令不实现开发期间的 Loop、完成判定或持续升级。
+纯解释/咨询返回 NONE，不因出现认证、迁移等词语就成为开发任务；执行现成操作的请求不能归为 NONE。用户指定的模式只是偏好，不能替代 STANDARD 触发证据，也不能绕过已知风险的强制升级规则。发现关键证据缺失时明确记录缺什么，不编造源码、调用方或测试证据。与 BMAD 一样由主 Agent 执行工作流指令，但这里使用默认 FAST／明确触发才 STANDARD 的策略，不采用 BMAD 本地版本默认的代码行数阈值。`/gkd-judge-route` 不实现开发期间的 Loop、完成判定或持续升级；`/gkd` 执行阶段由主 Agent 按 `execute.md` 进行开发、验证、必要审批与发布，分类器本身保持只读。
 
 命令通过 `pi.sendUserMessage()` 启动主 Agent 的原生回合，附加分流指令而不替换宿主原有系统提示词。任务、调查结果和分类都会进入当前会话上下文；这不是隔离的临时分类会话，已有对话也可能影响判断。模型请求、思考级别、取消、错误处理和用量记录均由 Pi 原生 Agent 循环负责，正常进入 Pi 会话 Token／费用统计，不重复上报 usage；费用仍取决于提供商报告和价格配置。
 
 调试期间只开放两个确定性工具：`gkd_route_evidence` 按需查找路径、搜索内容、分段读取和查询 Git 历史，`gkd_judge_route` 接收主 Agent 给出的 JSON、校验后结束调试。主 Agent 自行调查，不调用嵌套模型，也不提供子 Agent 委派；其他工具（包括任意 shell、写入、测试和委派）仍被拦截。结束、取消或会话退出时恢复原工具集，退出会中止尚未完成的调查；未提交结果就停止时显示警告，不伪造分类。
 
-分类 JSON 保存在原生工具结果中并在 TUI 展示。成功结构包含 `schemaVersion: "2.0"`、`status: "ok"`、`intent`、`route`、`confidence`、`riskLevel`、`reasons`、六项 `signals`、`requiresPlan`、`requiresApproval` 和 `error: null`。`requiresPlan` 仅在 STANDARD 时为 true；`requiresApproval` 在 STANDARD，以及 DIRECT 的非 low 风险或任一风险信号成立时为 true。这些只是分类结果，不执行计划或审批流程；false 不代表目标、范围或执行前检查已齐全。新增枚举及审批语义变化使协议升级到 2.0，外部调用方应按新版本处理；旧会话结果仍可展示。
+分类 JSON 保存在原生工具结果中并在 TUI 展示。对于 `/gkd`，只有校验成功的分类才会交给下一个执行回合；分类错误、中止、取消或切换会话均不会触发执行或创建 PR/MR。成功结构包含 `schemaVersion: "2.0"`、`status: "ok"`、`intent`、`route`、`confidence`、`riskLevel`、`reasons`、六项 `signals`、`requiresPlan`、`requiresApproval` 和 `error: null`。`requiresPlan` 仅在 STANDARD 时为 true；`requiresApproval` 在 STANDARD，以及 DIRECT 的非 low 风险或任一风险信号成立时为 true。这些只是分类结果，不执行计划或审批流程；false 不代表目标、范围或执行前检查已齐全。新增枚举及审批语义变化使协议升级到 2.0，外部调用方应按新版本处理；旧会话结果仍可展示。
 
 模型提交的 JSON 经过完整字段/类型/范围校验；开发任务仅在任一风险信号、非 low 风险等级、重要设计决策或依赖性分阶段实施触发时使用 STANDARD，其风险等级至少为 medium；无触发项时使用 FAST，不依赖模型的 route 偏好。开发任务提交 NONE／DIRECT 是协议错误，不以格式矛盾为由启动复杂工作流。操作任务必须使用 DIRECT，内部 assessment 全为 false；不应用开发复杂度判断，保留实际风险等级和风险信号。操作任务提交其他路由、assessment 含 true，或纯咨询提交 DIRECT 时视为协议错误，不自动放行为操作任务。无法解析或校验、启动时模型不可用或任务超限时输出 `status: "error"`、`intent: "unknown"`、`route: "NONE"` 及错误码，**不能把这种 NONE 当作非开发任务的成功分类**。不会从 Markdown 围栏或说明文字中猜测 JSON，也不额外请求模型修复；提供商请求失败与重试使用 Pi 原生处理。
 
@@ -167,6 +167,22 @@ pi -e .
 pi -e ./extensions/gkd-workflow/index.ts
 ```
 
+## GKD PR / MR Skill
+
+`skills/gkd-pr/SKILL.md` 随 Pi Package 自动发现，亦可通过 `/skill:gkd-pr` 单独调用。它提供 FAST、STANDARD 两套 PR / MR 正文模板：
+
+- `skills/gkd-pr/references/FAST.md`：变更摘要、实际验证和已知风险。
+- `skills/gkd-pr/references/STANDARD.md`：额外记录背景、STANDARD 升级依据、重要设计权衡、分阶段实施及回滚方案。
+
+默认流程：
+
+1. 输入 `/gkd <任务>`，通过 `judge-route` 只读工具获得有效的 FAST / STANDARD / DIRECT / NONE 分类。
+2. 分类成功后恢复正常工具，主 Agent 执行任务；STANDARD 根据实际风险先完成必要计划与审批。
+3. 开发与验证后，若有任务相关提交、未被用户禁止发布，且存在可写且已认证的 GitHub 或 GitLab 远程仓库，按路由加载对应模板并尝试创建／更新 PR 或 MR。远程仓库不明确、凭据/工具不可用、提交或验证状态有问题时，保留本地改动并报告阻碍，绝不假报发布成功。
+4. DIRECT 仅在用户明确要求创建 PR/MR 时发布；NONE 不发布。并不自动合并 PR/MR。
+
+优先使用可用的仓库集成，也可使用已安装并认证的 `gh` 或 `glab` CLI。不会自动安装 CLI、获取凭据、强制推送或提交无关文件。模板中的测试勾选项仅标记实际通过的验证。Skill 和执行提示均为 Agent 指令，**不是一个独立的确定性发布服务**：最终创建取决于模型执行、仓库状态、可用工具和远程权限。
+
 ## 竖线光标
 
 `extensions/bar-cursor.ts` 仅将终端原生光标设为闪烁的竖线，不再开启、覆盖或恢复 Hardware cursor 设置；不替换编辑器、不挂载 widget，也不修改 Pi 的 `settings.json`。
@@ -195,11 +211,18 @@ extensions/
     menu.ts            # 原生设置列表与 Fast 行内切换
     settings.ts        # 全局默认值读写
   gkd-workflow/
-    index.ts           # 命令注册入口与两个占位命令
+    index.ts           # /gkd、/gkd-settings 与分流注册
+    execute.md         # 分类成功后的执行与 PR/MR 发布阶段
     judge-route/
       index.ts         # 指令加载、调试命令、只读工具、安全校验与生命周期
       policy.md        # 分流原则、证据纪律与输出协议
       workflow.md      # 主 Agent 调查与结果提交步骤
+skills/
+  gkd-pr/
+    SKILL.md           # PR/MR 发布 Skill
+    references/
+      FAST.md          # FAST 变更正文
+      STANDARD.md      # STANDARD 设计、风险与验证正文
 tests/
   bar-cursor.test.mjs
   codex-setting.test.mjs
@@ -214,9 +237,7 @@ tsconfig.json          # 只做类型检查，不输出产物
 
 新增扩展时，在 `package.json` 的 `pi.extensions` 中显式列出入口，避免将辅助模块当作扩展加载。
 
-以下目录仅在需要时创建，并同步加入 `package.json` 的 `pi` 资源清单及 `files` 发布清单：
-
-- `skills/<name>/SKILL.md`：模型工作指引与配套资源。
+当前 `skills/gkd-pr/` 已加入 `package.json` 的 `pi.skills` 与 `files` 发布清单。其他资源目录在需要时创建，并同步更新清单：
 - `prompts/<name>.md`：可复用提示词。
 - `themes/<name>.json`：主题。
 
