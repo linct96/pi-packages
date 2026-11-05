@@ -2,17 +2,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerJudgeRoute } from "./judge-route/index.ts";
 
 export default function (pi: ExtensionAPI) {
-  registerJudgeRoute(pi);
+  const { startWorkflow } = registerJudgeRoute(pi);
 
   pi.registerCommand("gkd", {
-    description: "gkd-workflow 工作流入口（待实现）",
-    handler: async (_args, ctx) => {
-      if (!ctx.hasUI) return;
-      ctx.ui.notify(
-        "gkd-workflow：工作流入口已就绪，具体流程尚未实现。个人设置请使用 /gkd-settings。",
-        "info",
-      );
-    },
+    description: "GKD 工作流：先 judge-route，再执行开发并按 FAST/STANDARD 生成 PR/MR",
+    handler: (args, ctx) => startWorkflow(args, ctx),
   });
 
   pi.registerCommand("gkd-settings", {

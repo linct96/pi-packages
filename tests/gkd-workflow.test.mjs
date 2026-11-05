@@ -3,7 +3,9 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import test from "node:test";
 import gkdWorkflow from "../extensions/gkd-workflow/index.ts";
 import { parseRouteResponse, ROUTE_POLICY } from "../extensions/gkd-workflow/judge-route/index.ts";
@@ -77,9 +79,15 @@ function router() {
   };
 }
 
-test("package exposes debug command and keeps workflow/settings as placeholders", async () => {
+test("package exposes GKD workflow, publishing skill and debug command", async () => {
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.ok(manifest.pi.extensions.includes("./extensions/gkd-workflow/index.ts"));
+  assert.deepEqual(manifest.pi.skills, ["./extensions/gkd-workflow/gkd-pr"]);
+  assert.ok(manifest.files.includes("extensions"));
+  const skillDir = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-pr/", import.meta.url));
+  const discovered = loadSkillsFromDir({ dir: skillDir, source: "path" });
+  assert.deepEqual(discovered.diagnostics, []);
+  assert.deepEqual(discovered.skills.map((skill) => [skill.name, skill.filePath]), [["gkd-pr", join(skillDir, "SKILL.md")]]);
   const app = router();
   assert.deepEqual([...app.commands.keys()], ["gkd-judge-route", "gkd", "gkd-settings"]);
   for (const name of ["gkd", "gkd-settings"]) {
@@ -87,12 +95,78 @@ test("package exposes debug command and keeps workflow/settings as placeholders"
     await app.commands.get(name).handler("", { ...app.ctx, hasUI: false });
   }
   assert.equal(app.notifications.length, 2);
-  assert.match(app.notifications[0].message, /尚未实现/);
+  assert.match(app.notifications[0].message, /用法：\/gkd/);
   assert.match(app.notifications[1].message, /全局生效.*跨项目、跨会话共用/);
   assert.deepEqual(app.messages, []);
   assert.equal(app.event("before_agent_start", { messageType: "user", prompt: "普通开发任务", systemPrompt: "base" }), undefined);
   assert.equal(app.event("tool_call", { toolName: "write", input: {} }), undefined);
   assert.ok([...app.tools.values()].every((tool) => tool.defaultActive === false));
+});
+
+test("GKD handoff uses validated FAST / STANDARD routes and restores normal tools before implementation", async () => {
+  const instructions = await readFile(new URL("../extensions/gkd-workflow/execute.md", import.meta.url), "utf8");
+  const skillPath = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-pr/SKILL.md", import.meta.url));
+  const skill = await readFile(skillPath, "utf8");
+  for (const route of ["FAST", "STANDARD", "DIRECT", "NONE"]) {
+    const app = router();
+    await app.commands.get("gkd").handler("实现一个功能", app.ctx);
+    assert.deepEqual(app.activeTools(), ["gkd_route_evidence", "gkd_judge_route"]);
+    const classification = app.event("before_agent_start", { messageType: "user", prompt: app.messages[0], systemPrompt: "base" });
+    assert.match(classification.systemPrompt, /仅分类，不执行任务/);
+    const raw = route === "DIRECT" ? operationRoute()
+      : modelRoute({ intent: route === "NONE" ? "non_development" : "development", route });
+    if (route === "STANDARD") raw.signals.architectureChange = true;
+    const assessed = await app.submit(raw);
+    assert.equal(assessed.details.route, route);
+    assert.equal(app.messages.length, 1);
+    app.event("agent_settled");
+    assert.deepEqual(app.activeTools(), originalTools);
+    assert.equal(app.messages.length, 2);
+    const started = app.event("before_agent_start", { messageType: "user", prompt: app.messages[1], systemPrompt: "base" });
+    assert.match(started.systemPrompt, /GKD execution phase/);
+    assert.ok(started.systemPrompt.includes(instructions.trim()));
+    assert.ok(started.systemPrompt.includes("Validated GKD route: " + route));
+    assert.equal(started.systemPrompt.includes(skill.trim()), route === "FAST" || route === "STANDARD");
+    assert.equal(started.systemPrompt.includes(`GKD publication skill: ${skillPath}`), route === "FAST" || route === "STANDARD");
+    assert.equal(app.event("tool_call", { toolName: "write", input: {} }), undefined);
+    assert.equal(app.event("before_agent_start", { messageType: "user", prompt: app.messages[1], systemPrompt: "base" }), undefined);
+  }
+});
+
+test("debug classification never starts execution or PR publishing", async () => {
+  const app = router();
+  await app.run("修复一个按钮");
+  await app.submit(modelRoute());
+  app.event("agent_settled");
+  assert.equal(app.messages.length, 1);
+  assert.deepEqual(app.activeTools(), originalTools);
+});
+
+test("GKD route errors and aborts never trigger execution or PR publishing", async () => {
+  for (const raw of [modelRoute({ intent: "operation", route: "FAST" }), null]) {
+    const app = router();
+    await app.commands.get("gkd").handler("开发任务", app.ctx);
+    if (raw) await app.submit(raw);
+    app.event("agent_settled");
+    assert.equal(app.messages.length, 1);
+    assert.deepEqual(app.activeTools(), originalTools);
+  }
+  const app = router();
+  await app.commands.get("gkd").handler("开发任务", app.ctx);
+  await app.submit(modelRoute());
+  app.event("agent_settled", { aborted: true });
+  assert.equal(app.messages.length, 1);
+});
+
+test("PR publication skill supplies both route-specific templates and safe remote checks", async () => {
+  const skill = await readFile(new URL("../extensions/gkd-workflow/gkd-pr/SKILL.md", import.meta.url), "utf8");
+  const fast = await readFile(new URL("../extensions/gkd-workflow/gkd-pr/references/FAST.md", import.meta.url), "utf8");
+  const standard = await readFile(new URL("../extensions/gkd-workflow/gkd-pr/references/STANDARD.md", import.meta.url), "utf8");
+  for (const phrase of ["judge-route", "GitHub", "GitLab", "gh pr create", "glab mr create", "authentication", "Draft"]) {
+    assert.ok(skill.toLowerCase().includes(phrase.toLowerCase()), phrase);
+  }
+  assert.match(fast, /## Summary/);
+  assert.match(standard, /## STANDARD Rationale/);
 });
 
 test("debug dispatch loads Markdown policy and workflow relative to the module without replacing the system prompt", async () => {

@@ -6,8 +6,12 @@
   "type": "module",
   "packageManager": "pnpm@11.8.0",
   "license": "Apache-2.0",
-  "keywords": ["pi-package"],
-  "files": ["extensions"],
+  "keywords": [
+    "pi-package"
+  ],
+  "files": [
+    "extensions"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
@@ -20,6 +24,9 @@
       "./extensions/codex-setting/index.ts",
       "./extensions/bar-cursor.ts",
       "./extensions/gkd-workflow/index.ts"
+    ],
+    "skills": [
+      "./extensions/gkd-workflow/gkd-pr"
     ]
   },
   "peerDependencies": {

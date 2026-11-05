@@ -4,6 +4,7 @@ import { constants, readFileSync } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { devNull } from "node:os";
 import { basename, isAbsolute, matchesGlob, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createReadToolDefinition, truncateLine, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -39,6 +40,9 @@ type RawRoute = {
 
 export const ROUTE_POLICY = readFileSync(new URL("./policy.md", import.meta.url), "utf8").trim();
 const ROUTE_WORKFLOW = readFileSync(new URL("./workflow.md", import.meta.url), "utf8").trim();
+const EXECUTION_WORKFLOW = readFileSync(new URL("../execute.md", import.meta.url), "utf8").trim();
+const PR_SKILL_URL = new URL("../gkd-pr/SKILL.md", import.meta.url);
+const PR_SKILL = readFileSync(PR_SKILL_URL, "utf8").trim();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -299,7 +303,9 @@ function routeError(error: unknown, signal: AbortSignal) {
 export function registerJudgeRoute(pi: ExtensionAPI) {
   // Keep rendering results saved by earlier command-only versions.
   pi.registerEntryRenderer(ENTRY_TYPE, (entry) => new Text(JSON.stringify(entry.data, null, 2), 0, 0));
-  let active: { prompt: string; sessionId: string; tools: string[]; completed: boolean; controller: AbortController } | undefined;
+  type RouteRun = { prompt: string; task: string; mode: "debug" | "workflow"; sessionId: string; tools: string[]; completed: boolean; controller: AbortController; result?: Record<string, unknown> };
+  let active: RouteRun | undefined;
+  let execution: { prompt: string; sessionId: string; route: string } | undefined;
   function restoreTools() {
     const run = active;
     active = undefined;
@@ -312,16 +318,36 @@ export function registerJudgeRoute(pi: ExtensionAPI) {
     return active && active.sessionId === ctx.sessionManager.getSessionId() && !active.completed;
   }
 
-  pi.on("session_shutdown", restoreTools);
-  pi.on("agent_settled", (_event, ctx) => {
-    if (active && !active.completed) ctx.ui.notify("分流调试已结束，未生成有效分类结果。", "warning");
+  pi.on("session_shutdown", () => { execution = undefined; restoreTools(); });
+  pi.on("agent_settled", (event, ctx) => {
+    const run = active;
+    if (run && !run.completed) ctx.ui.notify("分流已结束，未生成有效分类结果。", "warning");
     restoreTools();
-  });
-  pi.on("before_agent_start", (event) => {
-    if (!active || event.messageType !== "user" || event.prompt !== active.prompt) return;
-    return {
-      systemPrompt: `${event.systemPrompt}\n\n${ROUTE_POLICY}\n\n${ROUTE_WORKFLOW}`,
+    if (!run || run.mode !== "workflow" || event.aborted || run.sessionId !== ctx.sessionManager.getSessionId()) return;
+    if (!run.completed || run.result?.status !== "ok" || typeof run.result.route !== "string") {
+      ctx.ui.notify("GKD 分流失败，已停止执行，不会发布 PR/MR。", "warning");
+      return;
+    }
+    const route = run.result.route;
+    execution = {
+      prompt: `GKD execute ${randomUUID()}\n${JSON.stringify({ task: run.task, route, riskLevel: run.result.riskLevel, reasons: run.result.reasons, requiresApproval: run.result.requiresApproval })}`,
+      sessionId: run.sessionId,
+      route,
     };
+    try { pi.sendUserMessage(execution.prompt); }
+    catch { execution = undefined; ctx.ui.notify("GKD 无法启动执行阶段，请重试。", "error"); }
+  });
+  pi.on("before_agent_start", (event, ctx) => {
+    if (event.messageType !== "user") return;
+    if (active && event.prompt === active.prompt) {
+      return { systemPrompt: `${event.systemPrompt}\n\n${ROUTE_POLICY}\n\n${ROUTE_WORKFLOW}` };
+    }
+    if (!execution || event.prompt !== execution.prompt || execution.sessionId !== ctx.sessionManager.getSessionId()) return;
+    const route = execution.route;
+    execution = undefined;
+    const skill = route === "FAST" || route === "STANDARD"
+      ? `\n\nGKD publication skill: ${fileURLToPath(PR_SKILL_URL)}\nTemplates are relative to that SKILL.md.\n\n${PR_SKILL}` : "";
+    return { systemPrompt: `${event.systemPrompt}\n\n${EXECUTION_WORKFLOW}\n\nValidated GKD route: ${route}${skill}` };
   });
   pi.on("tool_call", (event, ctx) => {
     if (!active) {
@@ -377,6 +403,7 @@ export function registerJudgeRoute(pi: ExtensionAPI) {
         result = routeError(error, signal ?? new AbortController().signal);
       }
       active!.completed = true;
+      active!.result = result;
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         details: result,
@@ -387,12 +414,10 @@ export function registerJudgeRoute(pi: ExtensionAPI) {
     renderResult(result) { return new Text(JSON.stringify(result.details, null, 2), 0, 0); },
   });
 
-  pi.registerCommand("gkd-judge-route", {
-    description: "由主 Agent 调试 DIRECT / FAST / STANDARD / NONE 分流，不执行任务",
-    handler: async (args, ctx) => {
+  async function startRoute(args: string, ctx: ExtensionContext, mode: "debug" | "workflow") {
       const task = args.trim();
       if (!task) {
-        ctx.ui.notify("用法：/gkd-judge-route <任务提示词>", "warning");
+        if (ctx.hasUI) ctx.ui.notify(mode === "debug" ? "用法：/gkd-judge-route <任务提示词>" : "用法：/gkd <任务提示词>", "warning");
         return;
       }
       if (active || !ctx.isIdle()) {
@@ -404,7 +429,8 @@ export function registerJudgeRoute(pi: ExtensionAPI) {
         return;
       }
       active = {
-        prompt: `GKD route debug ${randomUUID()}\n${JSON.stringify({ task })}`,
+        prompt: `GKD route ${mode} ${randomUUID()}\n${JSON.stringify({ task })}`,
+        task, mode,
         sessionId: ctx.sessionManager.getSessionId(), tools: pi.getActiveTools(), completed: false, controller: new AbortController(),
       };
       try {
@@ -412,8 +438,13 @@ export function registerJudgeRoute(pi: ExtensionAPI) {
         pi.sendUserMessage(active.prompt);
       } catch {
         restoreTools();
-        ctx.ui.notify("无法启动分流调试，请重试。", "error");
+        ctx.ui.notify("无法启动 GKD 分流，请重试。", "error");
       }
-    },
+  }
+
+  pi.registerCommand("gkd-judge-route", {
+    description: "由主 Agent 调试 DIRECT / FAST / STANDARD / NONE 分流，不执行任务",
+    handler: (args, ctx) => startRoute(args, ctx, "debug"),
   });
+  return { startWorkflow: (args: string, ctx: ExtensionContext) => startRoute(args, ctx, "workflow") };
 }
