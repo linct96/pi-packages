@@ -27,7 +27,7 @@
       "./extensions/gkd-workflow/index.ts"
     ],
     "skills": [
-      "./skills/gkd-pr"
+      "./skills"
     ]
   },
   "peerDependencies": {
