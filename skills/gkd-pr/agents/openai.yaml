@@ -1,0 +1,3 @@
+interface:
+  display_name: "GKD PR / MR"
+  short_description: "Publish FAST or STANDARD GitHub PRs and GitLab MRs"
