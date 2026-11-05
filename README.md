@@ -237,7 +237,7 @@ tsconfig.json          # 只做类型检查，不输出产物
 
 新增扩展时，在 `package.json` 的 `pi.extensions` 中显式列出入口，避免将辅助模块当作扩展加载。
 
-当前 `skills/gkd-pr/` 已加入 `package.json` 的 `pi.skills` 与 `files` 发布清单。其他资源目录在需要时创建，并同步更新清单：
+当前 `skills/` 已加入 `package.json` 的 `pi.skills` 与 `files` 发布清单。其他资源目录在需要时创建，并同步更新清单：
 - `prompts/<name>.md`：可复用提示词。
 - `themes/<name>.json`：主题。
 
