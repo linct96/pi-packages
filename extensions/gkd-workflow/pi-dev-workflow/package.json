@@ -1,0 +1,28 @@
+{
+  "name": "pi-dev-workflow",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Opt-in Pi development workflow with manual slash commands, automatic intent routing and bounded FAST/STANDARD loops",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/dev-workflow.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
