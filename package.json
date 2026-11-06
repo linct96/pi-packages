@@ -23,7 +23,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/codex-setting/index.ts",
+      "./extensions/codex-settings/index.ts",
       "./extensions/bar-cursor.ts",
       "./extensions/gkd-workflow/index.ts"
     ]

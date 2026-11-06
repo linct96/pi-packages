@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { parseProbeConfig } from "./model-probe/config.ts";
 
-async function readSettingsFile(path: string) {
+export interface Settings {
+  fast: boolean;
+  modelProbe?: unknown;
+  [key: string]: unknown;
+}
+
+async function readSettingsFile(
+  path: string,
+): Promise<{ text: string | undefined; settings: Settings }> {
   let text: string;
   try {
     text = await readFile(path, "utf8");
@@ -22,10 +31,11 @@ async function readSettingsFile(path: string) {
   ) {
     throw new Error(`Invalid Codex settings in ${path}: fast must be a boolean`);
   }
-  return { text, settings: { ...settings, fast: settings.fast } };
+  parseProbeConfig((settings as Settings).modelProbe);
+  return { text, settings: { ...settings, fast: settings.fast } as Settings };
 }
 
-export async function readSettings(path: string): Promise<{ fast: boolean }> {
+export async function readSettings(path: string): Promise<Settings> {
   return (await readSettingsFile(path)).settings;
 }
 
@@ -34,7 +44,8 @@ export async function saveSettings(
   fast: boolean,
   expectedFast: boolean,
   signal: AbortSignal,
-): Promise<void> {
+  probe?: { enabled: boolean; expectedSettings: Settings },
+): Promise<Settings> {
   signal.throwIfAborted();
   await mkdir(dirname(path), { recursive: true });
   signal.throwIfAborted();
@@ -55,20 +66,32 @@ export async function saveSettings(
     signal.throwIfAborted();
     const current = await readSettingsFile(path);
     if (current.settings.fast !== expectedFast) {
-      throw new Error("Codex Fast changed on disk. Reopen /codex-setting before saving.");
+      throw new Error("Codex Fast changed on disk. Reopen /codex-settings before saving.");
     }
-    await writeFile(temporaryPath, `${JSON.stringify({ ...current.settings, fast }, null, 2)}\n`, {
+    if (probe && JSON.stringify(current.settings) !== JSON.stringify(probe.expectedSettings)) {
+      throw new Error("Codex settings changed on disk. Reopen /codex-settings before saving.");
+    }
+    const updated: Settings = { ...current.settings, fast };
+    if (probe) {
+      const existing = current.settings.modelProbe;
+      updated.modelProbe = {
+        ...(existing && typeof existing === "object" ? existing : parseProbeConfig(undefined)),
+        enabled: probe.enabled,
+      };
+    }
+    await writeFile(temporaryPath, `${JSON.stringify(updated, null, 2)}\n`, {
       flag: "wx",
       mode: 0o600,
       signal,
     });
     const verified = await readSettingsFile(path);
     if (verified.text !== current.text) {
-      throw new Error("Codex settings changed while saving. Reopen /codex-setting before saving.");
+      throw new Error("Codex settings changed while saving. Reopen /codex-settings before saving.");
     }
     signal.throwIfAborted();
     // shortcut: external editors can race rename; require a shared writer protocol to eliminate that race.
     await rename(temporaryPath, path);
+    return updated;
   } finally {
     try {
       await rm(temporaryPath, { force: true });

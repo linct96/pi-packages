@@ -4,19 +4,15 @@ import {
   type KeybindingsManager,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Container,
-  SettingsList,
-  Spacer,
-  Text,
-  type TUI,
-} from "@earendil-works/pi-tui";
+import { Container, SettingsList, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 
 interface MenuOptions {
   fast: boolean;
   defaultFast: boolean;
+  probeEnabled?: boolean;
+  onProbeApply?(enabled: boolean): void;
   onApply(fast: boolean): void;
-  onSave(fast: boolean, signal: AbortSignal): Promise<void>;
+  onSave(fast: boolean, signal: AbortSignal, probeEnabled?: boolean): Promise<void>;
   onClose(): void;
 }
 
@@ -29,8 +25,7 @@ export function createSettingsMenu(
   const value = (fast: boolean) => (fast ? "on" : "off");
   const key = (action: Parameters<KeybindingsManager["getKeys"]>[0]) =>
     keybindings.getKeys(action).join("/") || "(unbound)";
-  const errorMessage = (error: unknown) =>
-    error instanceof Error ? error.message : String(error);
+  const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
   let saving = false;
   let disposed = false;
   let saveController: AbortController | undefined;
@@ -45,7 +40,10 @@ export function createSettingsMenu(
   const defaultValue = new Text("", 0, 0);
   function refreshDefault() {
     defaultValue.setText(
-      theme.fg("dim", `Default: ${value(options.defaultFast)} · ${key("app.models.save")} save current as default`),
+      theme.fg(
+        "dim",
+        `Default: ${value(options.defaultFast)} · ${key("app.models.save")} save current as default`,
+      ),
     );
   }
   refreshDefault();
@@ -55,21 +53,38 @@ export function createSettingsMenu(
       {
         id: "fast",
         label: "Fast",
-        description: "Codex Priority mode. May increase usage costs. Press Cmd+Shift+F in the main input to toggle.",
+        description:
+          "Codex Priority mode. May increase usage costs. Press Cmd+Shift+F in the main input to toggle.",
         currentValue: value(options.fast),
         values: ["off", "on"],
       },
+      {
+        id: "probe",
+        label: "Model Probe",
+        description:
+          "Probe on the first user message in a new session; run it only after passing. Existing conversations are not retested. Press Cmd+Shift+P in the main input to toggle.",
+        currentValue: value(options.probeEnabled ?? false),
+        values: ["off", "on"],
+      },
     ],
-    1,
+    2,
     getSettingsListTheme(),
-    (_id, selectedValue) => {
+    (id, selectedValue) => {
       try {
-        options.onApply(selectedValue === "on");
-        options.fast = selectedValue === "on";
+        if (id === "probe") {
+          options.onProbeApply?.(selectedValue === "on");
+          options.probeEnabled = selectedValue === "on";
+        } else {
+          options.onApply(selectedValue === "on");
+          options.fast = selectedValue === "on";
+        }
         status.setText("");
       } catch (error) {
         // SettingsList updates the row before onChange; roll it back if applying fails.
-        settingsList.updateValue("fast", value(options.fast));
+        settingsList.updateValue(
+          id,
+          value(id === "probe" ? (options.probeEnabled ?? false) : options.fast),
+        );
         status.setText(theme.fg("error", `Application failed: ${errorMessage(error)}`));
       }
     },
@@ -87,7 +102,7 @@ export function createSettingsMenu(
     status.setText(theme.fg("muted", "Saving…"));
     tui.requestRender();
     try {
-      await options.onSave(options.fast, controller.signal);
+      await options.onSave(options.fast, controller.signal, options.probeEnabled ?? false);
       if (disposed) return;
       options.defaultFast = options.fast;
       refreshDefault();

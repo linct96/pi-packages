@@ -6,11 +6,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createSettingsMenu } from "./menu.ts";
 import { readSettings, saveSettings } from "./settings.ts";
+import { createModelProbe } from "./model-probe/index.ts";
 
-const SESSION_ENTRY = "codex-setting";
+const SESSION_ENTRY = "codex-settings";
 
 export default function (pi: ExtensionAPI) {
-  const settingsPath = join(getAgentDir(), "codex-setting.json");
+  const settingsPath = join(getAgentDir(), "codex-settings.json");
   let defaultFast = false;
   let fast = false;
   let menuVersion = 0;
@@ -26,8 +27,12 @@ export default function (pi: ExtensionAPI) {
   function updateStatus(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
     // shortcut: setStatus stores ANSI text; reload after changing the Pi theme.
-    const showFast = fast && ctx.model?.provider === "openai-codex" && ctx.model.api === "openai-codex-responses";
-    ctx.ui.setStatus(SESSION_ENTRY, showFast ? ctx.ui.theme.fg("dim", "| Codex Fast |") : undefined);
+    const showFast =
+      fast && ctx.model?.provider === "openai-codex" && ctx.model.api === "openai-codex-responses";
+    ctx.ui.setStatus(
+      SESSION_ENTRY,
+      showFast ? ctx.ui.theme.fg("dim", "| Codex Fast |") : undefined,
+    );
   }
 
   function applyFast(value: boolean, ctx: ExtensionContext) {
@@ -70,6 +75,8 @@ export default function (pi: ExtensionAPI) {
     updateStatus(ctx);
   });
 
+  const probe = createModelProbe(pi, settingsPath);
+
   pi.on("before_provider_request", (event, ctx) => {
     const payload = event.payload;
     if (
@@ -96,11 +103,21 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("codex-setting", {
-    description: "Configure Codex Fast (Priority) mode",
+  pi.registerShortcut("super+shift+p", {
+    description: "Toggle Model Probe",
+    handler: (ctx) => {
+      if (ctx.mode !== "tui") return;
+      invalidateMenu();
+      probe.setEnabled(!probe.enabled, ctx);
+      ctx.ui.notify(`Model Probe: ${probe.enabled ? "on" : "off"}`, "info");
+    },
+  });
+
+  const openSettings: Parameters<ExtensionAPI["registerCommand"]>[1] = {
+    description: "Configure Codex Fast (Priority) and Model Probe",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui") {
-        ctx.ui.notify("/codex-setting requires TUI mode", "error");
+        ctx.ui.notify("/codex-settings requires TUI mode", "error");
         return;
       }
       invalidateMenu();
@@ -114,27 +131,40 @@ export default function (pi: ExtensionAPI) {
           selection.provider !== ctx.model?.provider ||
           selection.id !== ctx.model?.id
         ) {
-          throw new Error("The session or selected model changed. Reopen /codex-setting.");
+          throw new Error("The session or selected model changed. Reopen /codex-settings.");
         }
       }
       let close: (() => void) | undefined;
       try {
-        let { fast: expectedFast } = await readSettings(settingsPath);
+        let expectedSettings = await readSettings(settingsPath);
         checkCurrent();
-        defaultFast = expectedFast;
+        defaultFast = expectedSettings.fast;
         await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
           checkCurrent();
           const menu = createSettingsMenu(tui, theme, keybindings, {
             fast,
             defaultFast,
+            probeEnabled: probe.enabled,
+            onProbeApply(value) {
+              checkCurrent();
+              probe.setEnabled(value, ctx);
+            },
             onApply(value) {
               checkCurrent();
               applyFast(value, ctx);
             },
-            async onSave(value, signal) {
+            async onSave(value, signal, probeEnabled) {
               checkCurrent();
-              await saveSettings(settingsPath, value, expectedFast, signal);
-              expectedFast = value;
+              expectedSettings = await saveSettings(
+                settingsPath,
+                value,
+                expectedSettings.fast,
+                signal,
+                {
+                  enabled: probeEnabled ?? false,
+                  expectedSettings,
+                },
+              );
               if (version === menuVersion && !signal.aborted) defaultFast = value;
             },
             onClose: () => close?.(),
@@ -161,5 +191,6 @@ export default function (pi: ExtensionAPI) {
         close?.();
       }
     },
-  });
+  };
+  pi.registerCommand("codex-settings", openSettings);
 }

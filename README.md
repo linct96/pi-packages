@@ -19,12 +19,12 @@ pnpm test
 pi -e .
 ```
 
-启动后输入 `/codex-setting` 打开 Codex 设置。修改扩展后执行 `/reload`。
+启动后输入 `/codex-settings` 打开 Codex 设置。修改扩展后执行 `/reload`。
 
 只调试一个扩展时：
 
 ```bash
-pi -e ./extensions/codex-setting/index.ts
+pi -e ./extensions/codex-settings/index.ts
 ```
 
 `pnpm format` 使用 Oxfmt 格式化代码与文档，`pnpm lint` 使用 Oxlint 检查代码，警告也视为失败。两者均排除未接入运行的 `extensions/gkd-workflow/pi-dev-workflow/` 参考源码；格式化另外跳过由 pnpm 管理的锁文件。
@@ -33,12 +33,13 @@ pi -e ./extensions/codex-setting/index.ts
 
 ## Codex 设置
 
-运行 `pi -e .` 后输入 `/codex-setting`，直接在 **Fast** 设置行切换，无需进入子菜单。
+运行 `pi -e .` 后输入 `/codex-settings`，直接在 **Fast** 设置行切换，无需进入子菜单。
 
 ```text
 Codex Settings
 
-❯ Fast    off
+❯ Fast           off
+  Model Probe    off
 ```
 
 Fast 沿用 Pi 原生设置列表的行内切换：
@@ -51,7 +52,7 @@ Fast 沿用 Pi 原生设置列表的行内切换：
 
 菜单内快捷键沿用 Pi 的 `tui.select.*` 和 `app.models.save` 配置；如果你重绑了模型选择器的保存键，这里也会随之变化。
 
-在主输入框按 `Cmd+Shift+F`（Pi 键名 `super+shift+f`）可直接切换当前会话的 Fast 开关，无需打开菜单；会显示 `Codex Fast: on/off` 提示，并同步底栏状态，不修改全局默认值，从后续请求起生效。该快捷键不通过原生 `keybindings.json` 配置。终端需支持上报 `super` 修饰键（通常通过 Kitty 键盘协议），且不能被终端自身的搜索等快捷键拦截；不支持时仍可使用 `/codex-setting`。
+在主输入框按 `Cmd+Shift+F`（Pi 键名 `super+shift+f`）可直接切换当前会话的 Fast 开关，无需打开菜单；会显示 `Codex Fast: on/off` 提示，并同步底栏状态，不修改全局默认值，从后续请求起生效。该快捷键不通过原生 `keybindings.json` 配置。终端需支持上报 `super` 修饰键（通常通过 Kitty 键盘协议），且不能被终端自身的搜索等快捷键拦截；不支持时仍可使用 `/codex-settings`。
 
 Fast 默认为 `off`。`on` 为当前选中的 `openai-codex` / `openai-codex-responses` 模型请求设置 `service_tier: "priority"`，不改变模型、推理强度或其他请求字段；`off` 不改写请求，不会清理其他配置或插件自行设置的 tier。不会改写其他 provider、不同模型或虚拟模型路由后的请求。
 
@@ -59,12 +60,12 @@ Fast 默认为 `off`。`on` 为当前选中的 `openai-codex` / `openai-codex-re
 
 标记使用当前主题的 `dim` 色，与原生底栏一致，不写死 RGB，也不额外加粗或放大。字号和字体继承终端配置，Pi 插件不能单独设置。状态接口缓存已着色文字，切换 Pi 主题后执行 `/reload` 刷新标记颜色。
 
-全局默认值独立保存在 `~/.pi/agent/codex-setting.json`（设置了 `PI_CODING_AGENT_DIR` 时使用该目录），不修改 Pi 的原生 `settings.json`。
+全局默认值独立保存在 `~/.pi/agent/codex-settings.json`（设置了 `PI_CODING_AGENT_DIR` 时使用该目录），不修改 Pi 的原生 `settings.json`。配置文件名、会话存储键和状态栏键统一使用 `codex-settings`，不读取旧名称或迁移旧会话状态；切换到新版后请新建会话。
 
 保存保留临时文件加原子替换，并增加轻量冲突检测：
 
-- 每次打开菜单读取磁盘默认值，保存时若 Fast 与打开时的默认值不同，提示重新打开菜单，不覆盖。
-- 使用同目录 `codex-setting.json.lock` 排斥同时保存；遇到锁立即提示稍后重试，不阻塞菜单。正常结束、失败及取消均清理自己的锁和临时文件。
+- 每次打开菜单读取磁盘默认值；菜单保存同时保存 Fast 与 Model Probe 开关，若整个配置与打开时不同，提示重新打开菜单，不覆盖。
+- 使用同目录 `codex-settings.json.lock` 排斥同时保存；遇到锁立即提示稍后重试，不阻塞菜单。正常结束、失败及取消均清理自己的锁和临时文件。
 - 保存时保留其他配置字段，替换前再次检查文件内容，发现保存期间的外部修改则拒绝覆盖。配置损坏同样提示错误，不会静默覆盖。
 - 锁约束使用本插件的写入进程，不能完全消除不遵守锁协议的外部编辑器在最后检查与替换之间的竞争。进程被强制结束可能残留锁；只有确认没有其他进程正在保存时，才能手动移除错误提示中的锁文件。
 
@@ -75,6 +76,54 @@ Fast 默认为 `off`。`on` 为当前选中的 `openai-codex` / `openai-codex-re
 当前会话的确认值记录在会话自定义条目中，重载/恢复会话和分支导航时恢复；没有该条目的新会话使用全局默认值。全局默认值同样适用于 print/RPC 等模式，但菜单仅在 TUI 模式可用。
 
 Priority 的可用性、速度与实际计费由账号及服务端决定；不保证加速，Pi 展示的费用估算不能代替账单。
+
+### Model Probe
+
+在同一菜单切换 **Model Probe**，`Ctrl+S` 保存为新会话的默认值，`Esc` 关闭。默认关闭，与 Fast 独立。**新会话收到第一条普通用户消息时才启动检测**，仅打开会话或执行 `/new` 不调用模型；首条消息（含附图）先暂存，通过后再自动执行；失败时也可明确选择在当前会话继续。尚未对话的新会话中开启开关后直接发送 `hi` 即可触发，不必先保存全局默认值。切换不会追溯检测已有对话，也不会取消正在进行的检测或绕过失败门禁。空输入、扩展注入、斜杠命令和流式追加不作为首次检测触发点；普通 TUI/RPC 输入及纯图片输入均支持。
+
+在主输入框按 `Cmd+Shift+P`（Pi 键名 `super+shift+p`）可直接切换当前会话的 Model Probe 开关，同步菜单和状态栏并提示 `Model Probe: on/off`，不修改全局默认值，也不立即发起检测。与 `Cmd+Shift+F` 一样，需要终端支持上报 Super 修饰键且不被终端自身快捷键拦截；不支持时仍可使用 `/codex-settings`。
+
+开启时，TUI 底部状态栏显示 `Model Probe`，样式与 `Codex Fast` 一致，可同时展示；关闭时移除。会话启动、重载／恢复及分支导航时同步开关状态，不限模型 provider。标记仅表示 Model Probe 已开启，不代表检测已经通过，也不会触发检测；RPC／print／JSON 不设置此状态栏标记。
+
+Model Probe 与 Fast 共用 `~/.pi/agent/codex-settings.json`（尊重 `PI_CODING_AGENT_DIR`），支持仅包含 `{ "fast": false }` 的最小配置。可直接编辑问题与答案，然后新建会话并发送首条消息：
+
+```json
+{
+  "fast": false,
+  "modelProbe": {
+    "enabled": true,
+    "questions": [
+      {
+        "id": "japan-pm",
+        "question": "不要联网直接回复我现在的日本首相是谁？直接回答名字！",
+        "answer": "高市早苗"
+      }
+    ],
+    "validation": { "mode": "contains", "requireAll": true },
+    "isolation": { "disableTools": true, "clearSystemPrompt": true },
+    "onFailure": { "confirmRestart": true }
+  }
+}
+```
+
+只提供 `modelProbe.enabled` 时使用上面的默认问题和规则；显式配置的题目不能为空，ID 必须唯一，每题必须有非空问题和答案。目前只支持 `contains`、全部通过和开启上述隔离／重试确认保护，不接受关闭保护或其他校验模式。未知字段保留；损坏或非法配置会报错并阻止任务，不使用半份配置。时效性问题的答案需要用户维护，上面的答案只是可修改的预设，不是身份认证依据。
+
+- **当前模型原生回合**：不创建测试 Agent、不切换模型、不调用额外 LLM API。保留当前 provider、model、thinking、请求参数及 Fast/Priority。每题按顺序独立请求，本地做 NFKC／空白归一化和包含校验，任一错误、空回答、截断、请求异常或取消即失败。问题和真实回复保留在会话中；标准答案只在非 LLM 自定义状态和本地失败确认中使用，不发给模型。
+- **仅检测请求隔离**：`before_agent_start` 清空强制系统提示词，`context_with_system` 只投影空 system 与当前问题，移除业务历史、AGENTS、Skills 和全部工具声明；`tool_call` 再阻断执行。额外清除 Codex 序列化器为空 system 填入的默认 `instructions`。不调用 `setActiveTools([])`，不改全局工具集；结束后正常回合沿用原环境。
+- **TUI 检测面板**：复用第一条 `[codex-settings:model-probe]` 消息区域，在面板最下方显示「检测中...」「检测通过」「检测失败」等状态提示，每题按「问题：」「答案：」「回答：」顺序展示检测题目、预设标准答案和模型实际回复，并保留失败原因，不展示日志区域或逐题「判定」行；后续题目不再新开可见检测消息。明确跳过失败继续当前会话时显示「检测失败（已选择继续）」，不误报通过。过程日志仍保存在非 LLM 会话状态中，但不在面板展示，也不作为模型上下文。面板可用后不再重复弹出扩展通知；无面板、配置错误或持久化失败时仍保留显眼错误提示。只使用现有 Pi 发行版接口，不修改宿主，不隐藏或改写原生模型流式回复、思考及宿主错误；面板内的回答是检测完成后的汇总，原生输出仍可能单独出现。RPC／print／JSON 保持原有消息和通知路径。
+- **成功**：持久化 `PASSED`，显示「回答正确」，进入 `READY`；若有真正未执行的暂存消息，先持久化 `DELIVERING`，再按原文和 Pi 原生附图自动续发。没有待处理消息时不发送业务任务。
+- **失败**：持久化 `FAILED` 并阻止正常 Agent 输入／工具。TUI/RPC 交互区只显示一句话标题「模型检测未通过，请选择后续操作」和三个选项。TUI 借鉴 `@juicesharp/rpiv-ask-user-question` 的编号交互：`1`／`2`／`3` 直接选择，`↑`／`↓` 循环移动，确认键选择，取消键关闭；遵循 Pi 的按键配置，窄终端自动换行。只保留本流程需要的固定三选项，不增加问卷标签页、自定义文本或预览，不依赖该插件；RPC 继续使用原生选择框：
+  1. **重新创建会话并发送消息**：携带原首条消息及附图到新会话，重新检测，通过后才执行。继承启用状态，即使尚未保存全局默认值；再次失败仍显示这三个选项，不自动无限重试。内部重启命令带一次性确认标识，只在命令上下文调用 `newSession({ setup })`。
+  2. **继续当前会话并发送消息**：明确跳过本次失败，解除当前会话门禁并发送原消息及附图一次。不把检测改判为通过：保留失败回答和结果，记录 `user_override`；重载／恢复后仍可继续，不重复检测或发送。
+  3. **取消**：留在失败会话，保留原消息，不发送；`Esc` 关闭选择框同样处理。
+     print/JSON 无交互时报告错误，不自动重建或跳过检测。
+- **暂存和交接**：同时只保留一条文本／图片任务，额外输入明确拒绝，不覆盖。确认重建时用 `codex-settings:model-probe-handoff` 自定义条目交接，不进入模型上下文。来源会话先标记已转交，避免恢复旧会话再交付一次；普通 `/new` 不会擅自携带其他历史任务。重建期间的新输入明确拒绝，请在新会话重发。
+- **避免重复副作用优先**：交付尝试前就落盘；`/reload`、恢复或树回退发现已尝试交付／已转交（包括其他分支）时不自动重放。崩溃使交付结果不明确时保留失败状态和原文，请先检查真实执行结果，再决定是否手动重发。交接失败同样不自动重试任务；原消息仍保留在来源记录中。
+- **生命周期**：尚未发送首条消息的干净会话 `/reload`／`/resume` 后仍等待首次输入，沿用会话开关，首次检测采用发送时所选模型／thinking。已通过会话 `/reload`／`/resume` 不重复检测；中断中的检测恢复为失败。旧版已有对话但无检测记录的会话不追溯检测。`/tree` 按当前分支重判，未验证节点不沿用其他分支的通过状态。包含检测记录的 `/fork` 不视为干净会话，要求 `/new`；旧版无检测记录的非空分叉按旧对话处理。改变模型／provider／thinking 使已记录结果失效，需要干净新会话重测。
+
+实现和测试位于 `extensions/codex-settings/model-probe/` 与 `tests/model-probe.test.mjs`。测试覆盖真实 Pi SDK／Session runtime、离线 Faux 提供商，以及真实 Codex 序列化器配合模拟 HTTP/SSE：空提示词／工具、当前模型和推理强度、Priority、正常环境恢复、确认重建、附图交接、持久会话恢复及树／分叉门禁。
+
+边界：这只是回答异常筛查，不能证明远端模型身份；远端隐藏提示词不可控。其他扩展更晚的 `context_with_system`／`before_provider_request` 仍可能改写最终请求，新增此类扩展需复验隔离。输入门禁不等于所有命令的沙箱：`/gkd` 发起的 Agent 输入会被阻止，但扩展命令本身仍可能修改自己的状态或执行宿主操作；Shell 和会话管理命令不由本插件全面接管。Pi 的发送 API 是 fire-and-forget，10 秒未观察到启动会报错并保持门禁；不会据此自动重发。检测会产生正常模型费用，问题、回答、配置快照和暂存任务按会话数据保护。
 
 ## gkd-workflow
 
@@ -194,8 +243,8 @@ pi -e ./extensions/bar-cursor.ts
 ```text
 extensions/
   bar-cursor.ts        # 首次开启提示、光标形状与退出清理
-  codex-setting/
-    index.ts           # /codex-setting 命令、会话状态与请求钩子
+  codex-settings/
+    index.ts           # /codex-settings 命令、会话状态与请求钩子
     menu.ts            # 原生设置列表与 Fast 行内切换
     settings.ts        # 全局默认值读写
   gkd-workflow/
@@ -206,7 +255,7 @@ extensions/
       workflow.md      # 主 Agent 调查与结果提交步骤
 tests/
   bar-cursor.test.mjs
-  codex-setting.test.mjs
+  codex-settings.test.mjs
   gkd-workflow.test.mjs
 package.json           # 包信息与 pi 资源清单
 pnpm-lock.yaml         # 固定开发依赖

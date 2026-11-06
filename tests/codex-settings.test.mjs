@@ -5,10 +5,15 @@ import { join } from "node:path";
 import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
-import codexSetting from "../extensions/codex-setting/index.ts";
-import { createSettingsMenu } from "../extensions/codex-setting/menu.ts";
-import { readSettings, saveSettings } from "../extensions/codex-setting/settings.ts";
+import {
+  KeybindingsManager,
+  setKeybindings,
+  TUI_KEYBINDINGS,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import codexSettings from "../extensions/codex-settings/index.ts";
+import { createSettingsMenu } from "../extensions/codex-settings/menu.ts";
+import { readSettings, saveSettings } from "../extensions/codex-settings/settings.ts";
 
 initTheme("dark", false);
 const keybindings = new KeybindingsManager({
@@ -24,7 +29,7 @@ const escape = "\x1b";
 const ctrlS = "\x13";
 
 async function temporaryDirectory(t) {
-  const directory = await mkdtemp(join(tmpdir(), "pi-codex-setting-"));
+  const directory = await mkdtemp(join(tmpdir(), "pi-codex-settings-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
@@ -45,18 +50,18 @@ const settle = () => new Promise(setImmediate);
 
 test("settings default off, save atomically, and preserve other keys", async (t) => {
   const directory = await temporaryDirectory(t);
-  const path = join(directory, "agent", "codex-setting.json");
+  const path = join(directory, "agent", "codex-settings.json");
   assert.deepEqual(await readSettings(path), { fast: false });
   await saveSettings(path, true, false, new AbortController().signal);
   assert.deepEqual(await readSettings(path), { fast: true });
   await writeFile(path, JSON.stringify({ fast: true, other: "keep" }));
   await saveSettings(path, false, true, new AbortController().signal);
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { fast: false, other: "keep" });
-  assert.deepEqual(await readdir(join(directory, "agent")), ["codex-setting.json"]);
+  assert.deepEqual(await readdir(join(directory, "agent")), ["codex-settings.json"]);
 });
 
 test("malformed settings are reported and never overwritten", async (t) => {
-  const path = join(await temporaryDirectory(t), "codex-setting.json");
+  const path = join(await temporaryDirectory(t), "codex-settings.json");
   for (const original of ["{", '{"fast":"on"}', "null", "[]"]) {
     await writeFile(path, original);
     await assert.rejects(readSettings(path));
@@ -67,7 +72,7 @@ test("malformed settings are reported and never overwritten", async (t) => {
 
 test("stale defaults and concurrent writers are rejected without losing settings", async (t) => {
   const directory = await temporaryDirectory(t);
-  const path = join(directory, "codex-setting.json");
+  const path = join(directory, "codex-settings.json");
   const signal = () => new AbortController().signal;
   await writeFile(path, JSON.stringify({ fast: true, other: "keep" }));
   await assert.rejects(saveSettings(path, false, false, signal()), /changed on disk/);
@@ -83,18 +88,18 @@ test("stale defaults and concurrent writers are rejected without losing settings
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   assert.equal(results.filter((result) => result.status === "rejected").length, 1);
   assert.deepEqual(await readSettings(path), { fast: false, other: "keep" });
-  assert.deepEqual(await readdir(directory), ["codex-setting.json"]);
+  assert.deepEqual(await readdir(directory), ["codex-settings.json"]);
 });
 
 test("cancelled saves leave the file unchanged and do not create a lock", async (t) => {
   const directory = await temporaryDirectory(t);
-  const path = join(directory, "codex-setting.json");
+  const path = join(directory, "codex-settings.json");
   await writeFile(path, '{"fast":false}');
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(saveSettings(path, true, false, controller.signal), { name: "AbortError" });
   assert.equal(await readFile(path, "utf8"), '{"fast":false}');
-  assert.deepEqual(await readdir(directory), ["codex-setting.json"]);
+  assert.deepEqual(await readdir(directory), ["codex-settings.json"]);
 });
 
 test("Space and Enter toggle inline without saving, Esc closes without reverting", () => {
@@ -103,8 +108,12 @@ test("Space and Enter toggle inline without saving, Esc closes without reverting
   let closes = 0;
   const component = menu({
     onApply: (fast) => applied.push(fast),
-    onSave: async () => { saves++; },
-    onClose: () => { closes++; },
+    onSave: async () => {
+      saves++;
+    },
+    onClose: () => {
+      closes++;
+    },
   });
   assert.match(text(component), /Fast\s+off/);
   assert.match(text(component), /Default: off/);
@@ -130,7 +139,9 @@ test("Ctrl+S saves the current value without reapplying and prevents changes whi
     onApply: (fast) => applied.push(fast),
     onSave: (fast) => {
       saved.push(fast);
-      return new Promise((resolve) => { complete = resolve; });
+      return new Promise((resolve) => {
+        complete = resolve;
+      });
     },
   });
   component.handleInput(space);
@@ -156,7 +167,9 @@ test("save failure keeps the applied session value and leaves the default unchan
   const applied = [];
   const component = menu({
     onApply: (fast) => applied.push(fast),
-    onSave: async () => { throw new Error("disk unavailable"); },
+    onSave: async () => {
+      throw new Error("disk unavailable");
+    },
   });
   component.handleInput(space);
   component.handleInput(ctrlS);
@@ -187,9 +200,11 @@ test("application failure leaves the current value unchanged and permits retry",
 });
 
 test("saving persists the inline value and subsequent toggles only affect the session", async (t) => {
-  const path = join(await temporaryDirectory(t), "codex-setting.json");
+  const path = join(await temporaryDirectory(t), "codex-settings.json");
   let saved;
-  const finished = new Promise((resolve) => { saved = resolve; });
+  const finished = new Promise((resolve) => {
+    saved = resolve;
+  });
   const applied = [];
   const component = menu({
     onApply: (fast) => applied.push(fast),
@@ -217,16 +232,27 @@ test("disposing a saving menu aborts it and ignores late results and input", asy
   let complete;
   let renders = 0;
   const applied = [];
-  const component = createSettingsMenu({ requestRender() { renders++; } }, theme, keybindings, {
-    fast: false,
-    defaultFast: false,
-    onApply: (fast) => applied.push(fast),
-    onSave(_fast, currentSignal) {
-      signal = currentSignal;
-      return new Promise((resolve) => { complete = resolve; });
+  const component = createSettingsMenu(
+    {
+      requestRender() {
+        renders++;
+      },
     },
-    onClose() {},
-  });
+    theme,
+    keybindings,
+    {
+      fast: false,
+      defaultFast: false,
+      onApply: (fast) => applied.push(fast),
+      onSave(_fast, currentSignal) {
+        signal = currentSignal;
+        return new Promise((resolve) => {
+          complete = resolve;
+        });
+      },
+      onClose() {},
+    },
+  );
   component.handleInput(space);
   component.handleInput(ctrlS);
   component.dispose();
@@ -246,9 +272,10 @@ test("Esc during saving requests cancellation and retains the applied session va
   const applied = [];
   const component = menu({
     onApply: (fast) => applied.push(fast),
-    onSave: (_fast, signal) => new Promise((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-    }),
+    onSave: (_fast, signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }),
   });
   component.handleInput(space);
   component.handleInput(ctrlS);
@@ -272,6 +299,7 @@ test("command applies Priority only to the selected Codex model and restores bra
   const events = new Map();
   let command;
   let shortcut;
+  let probeShortcut;
   let component;
   let onMenuOpen;
   let branch = [];
@@ -280,15 +308,30 @@ test("command applies Priority only to the selected Codex model and restores bra
   const notices = [];
   const statuses = new Map();
   const statusColors = [];
-  codexSetting({
-    on: (name, handler) => events.set(name, handler),
-    registerCommand(name, options) {
-      assert.equal(name, "codex-setting");
-      command = options;
+  codexSettings({
+    on(name, handler) {
+      const previous = events.get(name);
+      events.set(
+        name,
+        previous
+          ? (...args) => {
+              const result = previous(...args);
+              return result instanceof Promise
+                ? result.then(() => handler(...args))
+                : handler(...args);
+            }
+          : handler,
+      );
     },
+    registerCommand(name, options) {
+      if (name === "codex-settings") command = options;
+      else assert.equal(name, "codex-probe-restart");
+    },
+    registerMessageRenderer() {},
     registerShortcut(key, options) {
-      assert.equal(key, "super+shift+f");
-      shortcut = options;
+      assert.ok(["super+shift+f", "super+shift+p"].includes(key));
+      if (key === "super+shift+f") shortcut = options;
+      else probeShortcut = options;
     },
     appendEntry(customType, data) {
       if (failAppend) throw new Error("cannot write session");
@@ -299,7 +342,11 @@ test("command applies Priority only to the selected Codex model and restores bra
   const ctx = {
     mode: "tui",
     model,
-    sessionManager: { getBranch: () => branch, getSessionId: () => sessionId },
+    sessionManager: {
+      getBranch: () => branch,
+      getEntries: () => branch,
+      getSessionId: () => sessionId,
+    },
     ui: {
       theme: {
         fg(color, text) {
@@ -321,27 +368,40 @@ test("command applies Priority only to the selected Codex model and restores bra
     },
   };
   async function openMenu() {
-    const mounted = new Promise((resolve) => { onMenuOpen = resolve; });
+    const mounted = new Promise((resolve) => {
+      onMenuOpen = resolve;
+    });
     const completed = command.handler("", ctx);
     await mounted;
     return { completed };
   }
   const request = events.get("before_provider_request");
   const payload = { model: "gpt-test", input: [], service_tier: "auto" };
-  for (const data of [undefined, null, true, 1, "fast", [], {}, { fast: "true" }, { fast: 1 }, { fast: null }]) {
-    branch = [{ type: "custom", customType: "codex-setting", data }];
+  for (const data of [
+    undefined,
+    null,
+    true,
+    1,
+    "fast",
+    [],
+    {},
+    { fast: "true" },
+    { fast: 1 },
+    { fast: null },
+  ]) {
+    branch = [{ type: "custom", customType: "codex-settings", data }];
     await events.get("session_start")({}, ctx);
     assert.equal(request({ payload }, ctx), undefined);
-    assert.equal(statuses.has("codex-setting"), false);
+    assert.equal(statuses.has("codex-settings"), false);
   }
   branch = [];
   await events.get("session_start")({}, ctx);
   assert.equal(request({ payload }, ctx), undefined);
-  assert.equal(statuses.has("codex-setting"), false);
+  assert.equal(statuses.has("codex-settings"), false);
   await openMenu();
   component.handleInput(space);
   assert.deepEqual(request({ payload }, ctx), { ...payload, service_tier: "priority" });
-  assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
+  assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
   const enabledBranch = [...branch];
   for (const otherModel of [
     { ...model, provider: "anthropic", api: "anthropic-messages" },
@@ -352,40 +412,62 @@ test("command applies Priority only to the selected Codex model and restores bra
   ]) {
     ctx.model = otherModel;
     events.get("model_select")({ model: otherModel }, ctx);
-    assert.equal(statuses.has("codex-setting"), false);
+    assert.equal(statuses.has("codex-settings"), false);
     assert.equal(request({ payload }, ctx), undefined);
   }
   await events.get("session_start")({}, ctx);
-  assert.equal(statuses.has("codex-setting"), false);
+  assert.equal(statuses.has("codex-settings"), false);
   ctx.model = model;
   events.get("model_select")({ model }, ctx);
-  assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
+  assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
   assert.equal(request({ payload }, ctx).service_tier, "priority");
   assert.deepEqual(branch, enabledBranch);
   assert.equal(payload.service_tier, "auto");
-  assert.equal(request({ payload }, { ...ctx, model: { ...model, provider: "openai" } }), undefined);
-  assert.equal(request({ payload }, { ...ctx, model: { ...model, api: "openai-responses" } }), undefined);
+  assert.equal(
+    request({ payload }, { ...ctx, model: { ...model, provider: "openai" } }),
+    undefined,
+  );
+  assert.equal(
+    request({ payload }, { ...ctx, model: { ...model, api: "openai-responses" } }),
+    undefined,
+  );
   assert.equal(request({ payload: { model: "another-model" } }, ctx), undefined);
-  for (const invalidPayload of [undefined, null, false, true, 0, 1, "gpt-test", [], {}, { model: null }]) {
+  for (const invalidPayload of [
+    undefined,
+    null,
+    false,
+    true,
+    0,
+    1,
+    "gpt-test",
+    [],
+    {},
+    { model: null },
+  ]) {
     assert.equal(request({ payload: invalidPayload }, ctx), undefined);
   }
   await events.get("session_start")({}, ctx);
   assert.equal(request({ payload }, ctx).service_tier, "priority");
-  assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
+  assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
   branch = [];
   await events.get("session_tree")({}, ctx);
   assert.equal(request({ payload }, ctx), undefined);
-  assert.equal(statuses.has("codex-setting"), false);
-  await saveSettings(join(directory, "codex-setting.json"), true, false, new AbortController().signal);
+  assert.equal(statuses.has("codex-settings"), false);
+  await saveSettings(
+    join(directory, "codex-settings.json"),
+    true,
+    false,
+    new AbortController().signal,
+  );
   await events.get("session_start")({}, ctx);
   assert.equal(request({ payload }, ctx).service_tier, "priority");
-  assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
+  assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
   await openMenu();
   component.handleInput(space);
-  assert.equal(statuses.has("codex-setting"), false);
+  assert.equal(statuses.has("codex-settings"), false);
   assert.equal(request({ payload }, ctx), undefined);
   await events.get("session_start")({}, ctx);
-  assert.equal(statuses.has("codex-setting"), false);
+  assert.equal(statuses.has("codex-settings"), false);
   ctx.mode = "rpc";
   await command.handler("", ctx);
   assert.match(notices.at(-1)[0], /requires TUI/);
@@ -428,49 +510,100 @@ test("command applies Priority only to the selected Codex model and restores bra
   assert.equal(request({ payload }, ctx).service_tier, "priority");
   component.handleInput(escape);
   await fourth.completed;
-  await t.test("Cmd+Shift+F toggles session Fast, closes stale menus, and preserves defaults", async () => {
-    const opened = await openMenu();
-    const staleMenu = component;
-    shortcut.handler(ctx);
-    await opened.completed;
-    assert.deepEqual(branch.at(-1), { type: "custom", customType: "codex-setting", data: { fast: false } });
-    assert.equal(request({ payload }, ctx), undefined);
-    assert.equal(statuses.has("codex-setting"), false);
-    assert.deepEqual(notices.at(-1), ["Codex Fast: off", "info"]);
-    const afterToggle = [...branch];
-    staleMenu.handleInput(space);
-    assert.deepEqual(branch, afterToggle);
-    await events.get("session_start")({}, ctx);
-    assert.equal(request({ payload }, ctx), undefined);
-    assert.deepEqual(await readSettings(join(directory, "codex-setting.json")), { fast: true });
-    for (const mode of ["rpc", "print", "json"]) shortcut.handler({ ...ctx, mode });
-    assert.deepEqual(branch, afterToggle);
-    failAppend = true;
-    assert.throws(() => shortcut.handler(ctx), /cannot write session/);
-    assert.equal(request({ payload }, ctx), undefined);
-    assert.equal(statuses.has("codex-setting"), false);
-    assert.deepEqual(branch, afterToggle);
-    failAppend = false;
-    shortcut.handler(ctx);
-    assert.equal(request({ payload }, ctx).service_tier, "priority");
-    assert.equal(statuses.get("codex-setting"), "| Codex Fast |");
-    assert.deepEqual(notices.at(-1), ["Codex Fast: on", "info"]);
-    await events.get("session_tree")({}, ctx);
-    assert.equal(request({ payload }, ctx).service_tier, "priority");
-    const reopened = await openMenu();
-    assert.match(text(component), /Fast\s+on/);
-    assert.match(text(component), /Default: on/);
-    component.handleInput(escape);
-    await reopened.completed;
-    assert.deepEqual(await readSettings(join(directory, "codex-setting.json")), { fast: true });
-  });
+  await t.test(
+    "Cmd+Shift+F toggles session Fast, closes stale menus, and preserves defaults",
+    async () => {
+      const opened = await openMenu();
+      const staleMenu = component;
+      shortcut.handler(ctx);
+      await opened.completed;
+      assert.deepEqual(branch.at(-1), {
+        type: "custom",
+        customType: "codex-settings",
+        data: { fast: false },
+      });
+      assert.equal(request({ payload }, ctx), undefined);
+      assert.equal(statuses.has("codex-settings"), false);
+      assert.deepEqual(notices.at(-1), ["Codex Fast: off", "info"]);
+      const afterToggle = [...branch];
+      staleMenu.handleInput(space);
+      assert.deepEqual(branch, afterToggle);
+      await events.get("session_start")({}, ctx);
+      assert.equal(request({ payload }, ctx), undefined);
+      assert.deepEqual(await readSettings(join(directory, "codex-settings.json")), { fast: true });
+      for (const mode of ["rpc", "print", "json"]) shortcut.handler({ ...ctx, mode });
+      assert.deepEqual(branch, afterToggle);
+      failAppend = true;
+      assert.throws(() => shortcut.handler(ctx), /cannot write session/);
+      assert.equal(request({ payload }, ctx), undefined);
+      assert.equal(statuses.has("codex-settings"), false);
+      assert.deepEqual(branch, afterToggle);
+      failAppend = false;
+      shortcut.handler(ctx);
+      assert.equal(request({ payload }, ctx).service_tier, "priority");
+      assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
+      assert.deepEqual(notices.at(-1), ["Codex Fast: on", "info"]);
+      await events.get("session_tree")({}, ctx);
+      assert.equal(request({ payload }, ctx).service_tier, "priority");
+      const reopened = await openMenu();
+      assert.match(text(component), /Fast\s+on/);
+      assert.match(text(component), /Default: on/);
+      component.handleInput(escape);
+      await reopened.completed;
+      assert.deepEqual(await readSettings(join(directory, "codex-settings.json")), { fast: true });
+    },
+  );
+  await t.test(
+    "Cmd+Shift+P toggles session Probe with footer/menu sync and leaves defaults and Fast unchanged",
+    async () => {
+      const key = "codex-settings:model-probe";
+      const opened = await openMenu();
+      const staleMenu = component;
+      probeShortcut.handler(ctx);
+      await opened.completed;
+      assert.deepEqual(branch.at(-1), {
+        type: "custom",
+        customType: "codex-settings:model-probe:setting",
+        data: { enabled: true },
+      });
+      assert.equal(statuses.get(key), "| Model Probe |");
+      assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
+      assert.deepEqual(notices.at(-1), ["Model Probe: on", "info"]);
+      const afterToggle = [...branch];
+      staleMenu.handleInput(space);
+      assert.deepEqual(branch, afterToggle);
+      await events.get("session_start")({}, ctx);
+      assert.equal(statuses.get(key), "| Model Probe |");
+      assert.deepEqual(await readSettings(join(directory, "codex-settings.json")), { fast: true });
+      for (const mode of ["rpc", "print", "json"]) probeShortcut.handler({ ...ctx, mode });
+      assert.deepEqual(branch, afterToggle);
+      failAppend = true;
+      assert.throws(() => probeShortcut.handler(ctx), /cannot write session/);
+      assert.equal(statuses.get(key), "| Model Probe |");
+      assert.deepEqual(branch, afterToggle);
+      failAppend = false;
+      const reopened = await openMenu();
+      assert.match(text(component), /Model Probe\s+on/);
+      component.handleInput(escape);
+      await reopened.completed;
+      probeShortcut.handler(ctx);
+      assert.equal(statuses.has(key), false);
+      assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
+      assert.deepEqual(notices.at(-1), ["Model Probe: off", "info"]);
+      assert.deepEqual(await readSettings(join(directory, "codex-settings.json")), { fast: true });
+    },
+  );
   branch = [];
   const headlessCtx = {
     ...ctx,
     mode: "print",
     ui: {
-      get theme() { throw new Error("Theme not initialized"); },
-      setStatus() { assert.fail("Headless sessions must not render status"); },
+      get theme() {
+        throw new Error("Theme not initialized");
+      },
+      setStatus() {
+        assert.fail("Headless sessions must not render status");
+      },
     },
   };
   await events.get("session_start")({}, headlessCtx);
