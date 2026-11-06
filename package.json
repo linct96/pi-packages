@@ -25,6 +25,7 @@
     "extensions": [
       "./extensions/codex-settings/index.ts",
       "./extensions/bar-cursor.ts",
+      "./extensions/footer-status/index.ts",
       "./extensions/gkd-workflow/index.ts"
     ]
   },

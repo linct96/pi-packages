@@ -31,6 +31,35 @@ pi -e ./extensions/codex-settings/index.ts
 
 `pnpm test` 使用 Node.js 内置测试运行器与 TypeScript 类型擦除，不依赖额外测试框架；部分 Node.js 版本会显示实验性类型擦除提示。
 
+## Footer Status
+
+`extensions/footer-status/index.ts` 在 TUI 启动／重载时替换原生底栏，使用当前主题的 `dim` 色，不修改 Pi 本体或用户配置。布局如下（模型信息动态读取，不写死示例名称）：
+
+```text
+~/project (main)               $0.123 | 8.0%/200k | gpt-6.1-sol (sub) • high
+| Codex Fast | | Model Probe | GKD Auto · on
+```
+
+第一行左侧保留目录、Git 分支和会话名称，右侧按「计费信息 | 上下文信息 | 模型 (提供商) • 思考程度」（`|` 和 `•` 两侧均各留一个普通空格）展示。提供商 `openai-codex` 简写为 `sub`，`openai` 简写为 `api`，其他提供商保留原名；不再单独显示费用订阅或 `(auto)` 标记；底栏不再展示 TPS／TTFT 和 Token 统计；扩展状态按键名排序，共用第二行，没有状态时不占行。窄窗口仍优先保留左侧路径和 Git 分支；右侧按「模型 → 思考程度 → 上下文 → 计费 → 模型提供商」的优先级保留完整字段。先隐藏会话名称，再依次隐藏提供商、计费、上下文、思考程度、模型，最后隐藏 Git 分支；仅路径本身仍放不下时才截断，不换行。保留的模型信息仍在右侧。
+
+每次成功的模型回复结束后，在聊天记录中以 `dim` 色追加一行统计，窄窗口截断而不换行：
+
+```text
+TPS 42.3, TTFT 0.85s, in 12k, out 800, cr 9.0k, total 22k, CH 75.0%, time 120.2s
+```
+
+指标字段统一使用「名称简写 + 空格 + 数值」，以 `, ` 分隔；末尾的 `time` 为一位小数的累计耗时，单位秒。`in`／`out` 为累计输入／输出 Token，`cr`／`cw` 为累计缓存读取／写入 Token，`total` 为提供商报告的 `usage.totalTokens` 累计值，位于 `CH` 左侧；Token 用量为零时隐藏，`CH` 为缓存命中率。已保存的历史统计文本保持原样，仅后续回复使用新格式。
+
+末尾的 `time 120.2s` 参考原 Elapsed 的整轮任务口径，从首次 `before_agent_start` 累计至该条统计写入时的 `turn_end`，包含首字等待、模型生成、工具执行、重试等待和同一任务内的多次请求；不是单次模型耗时。`agent_settled` 后清零，不计任务间的空闲时间；会话切换、分支导航或重载也会清零。使用本地单调时钟，不依赖第三方 Elapsed 扩展、后台计时器或其暂停控制；缺少起始计时时不显示秒数，旧快照不补写。
+
+`TPS` 和紧随其后的 `TTFT` 对应该次模型回复。TTFT 从 `before_provider_request` 请求发送钩子到首个非空文本／思考／工具参数 delta，单位秒；连接成功、空片段和 start 事件不算首字。TPS 按 Sub2API 的单请求口径，使用提供商报告的 `usage.output ÷ 请求完整耗时（秒）`；耗时从 `before_provider_request` 到模型回复结束，即首字等待与后续生成时间之和，包含等待／预填充和隐藏思考，不扣 TTFT、不包含后续工具执行，不累计多次回复，也不按字符估算。输出 Token 保留提供商原有口径，不额外叠加推理 Token。这里是客户端观察到的单请求整体输出吞吐，受网络和提供商 token 口径影响，不等同于服务端纯解码速度。
+
+每次成功回复的计时和统计文本在 `turn_end` 按原生回复 entry ID 写入非 LLM 的 `footer-status:timing` 会话条目，通过 entry renderer 展示，不使用通知；不会修改原生消息／usage／duration 或发给模型。含工具调用的回复在该轮工具执行完成后追加统计；TPS／TTFT 不包含工具执行，末尾累计耗时包含。Token 用量沿用累计口径，包含截至当时的所有分支、工具、缓存预热和摘要用量；CH 为当时最近模型回复的缓存命中率。统计写入后不随后续回复变化，恢复会话／分支导航／重载时保持原快照；旧计时条目没有统计快照时不补写、不占行。不支持请求发送钩子的提供商、缺少首字计时的回复、错误或取消不追加统计；空输出不显示 TPS／TTFT。若请求完整耗时为零，仅显示 TTFT，避免除零；首个片段与结束间隔为零但首字等待大于零时，仍可计算 TPS。不增加后台计时器或模型请求。
+
+若同时安装 `@router-for-me/pi-cliproxyapi-provider`，可通过 `pi config` 单独禁用其 `extensions/tps.ts`，避免它继续输出独立的 TPS 通知；本扩展不拦截其他扩展的通知。
+
+仅 TUI 生效，RPC／print／JSON 不受影响。包加载后执行 `/reload` 即可生效；禁用此扩展并重载可恢复原生底栏。不能与另一个 `setFooter()` 扩展叠加，最后设置者生效。
+
 ## Codex 设置
 
 运行 `pi -e .` 后输入 `/codex-settings`，直接在 **Fast** 设置行切换，无需进入子菜单。
@@ -243,6 +272,9 @@ pi -e ./extensions/bar-cursor.ts
 ```text
 extensions/
   bar-cursor.ts        # 首次开启提示、光标形状与退出清理
+  footer-status/
+    index.ts           # 底栏注册、回复计时与生命周期
+    footer.ts          # 底栏渲染、累计用量与布局
   codex-settings/
     index.ts           # /codex-settings 命令、会话状态与请求钩子
     menu.ts            # 原生设置列表与 Fast 行内切换
@@ -255,6 +287,7 @@ extensions/
       workflow.md      # 主 Agent 调查与结果提交步骤
 tests/
   bar-cursor.test.mjs
+  footer-status.test.mjs
   codex-settings.test.mjs
   gkd-workflow.test.mjs
 package.json           # 包信息与 pi 资源清单
