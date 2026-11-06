@@ -35,10 +35,14 @@ function readTiming(data: unknown) {
     typeof data.ttftMs !== "number" ||
     !Number.isFinite(data.ttftMs) ||
     data.ttftMs < 0 ||
-    !("generationMs" in data) ||
-    typeof data.generationMs !== "number" ||
-    !Number.isFinite(data.generationMs) ||
-    data.generationMs < 0
+    !("requestMs" in data) ||
+    typeof data.requestMs !== "number" ||
+    !Number.isFinite(data.requestMs) ||
+    data.requestMs < 0 ||
+    !("outputTokens" in data) ||
+    typeof data.outputTokens !== "number" ||
+    !Number.isFinite(data.outputTokens) ||
+    data.outputTokens < 0
   )
     return;
   const elapsedMs =
@@ -51,20 +55,18 @@ function readTiming(data: unknown) {
   return {
     messageEntryId: data.messageEntryId,
     ttftMs: data.ttftMs,
-    generationMs: data.generationMs,
+    requestMs: data.requestMs,
+    outputTokens: data.outputTokens,
     elapsedMs,
   };
 }
 
 function summarizeUsage(entries: readonly SessionEntry[]) {
   const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
-  let cacheHitRate: number | undefined;
   for (const entry of entries) {
     let usage;
     if (entry.type === "message" && entry.message.role === "assistant") {
       usage = entry.message.usage;
-      const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-      cacheHitRate = promptTokens > 0 ? (usage.cacheRead / promptTokens) * 100 : undefined;
     } else if (entry.type === "message" && entry.message.role === "toolResult") {
       usage = entry.message.usage;
     } else if (
@@ -82,7 +84,7 @@ function summarizeUsage(entries: readonly SessionEntry[]) {
     totals.totalTokens += usage.totalTokens;
     totals.cost += usage.cost.total;
   }
-  return { ...totals, cacheHitRate };
+  return totals;
 }
 
 export function formatResponseStats(entries: readonly SessionEntry[], data: unknown): string {
@@ -90,15 +92,11 @@ export function formatResponseStats(entries: readonly SessionEntry[], data: unkn
   if (!timing) return "";
   const entry = entries.find((entry) => entry.id === timing.messageEntryId);
   if (entry?.type !== "message" || entry.message.role !== "assistant") return "";
-  const message = entry.message;
-  if (["error", "aborted"].includes(message.stopReason)) return "";
+  if (["error", "aborted", "toolUse"].includes(entry.message.stopReason)) return "";
   const totals = summarizeUsage(entries);
   const stats: string[] = [];
-  const output = message.usage.output;
-  if (output > 0 && Number.isFinite(output)) {
-    const requestMs = timing.ttftMs + timing.generationMs;
-    const tps =
-      requestMs > 0 && Number.isFinite(requestMs) ? output / (requestMs / 1000) : undefined;
+  if (timing.outputTokens > 0) {
+    const tps = timing.requestMs > 0 ? timing.outputTokens / (timing.requestMs / 1000) : undefined;
     if (tps !== undefined && Number.isFinite(tps)) stats.push(`TPS ${tps.toFixed(1)}`);
     stats.push(`TTFT ${(timing.ttftMs / 1000).toFixed(2)}s`);
   }
@@ -111,8 +109,9 @@ export function formatResponseStats(entries: readonly SessionEntry[], data: unkn
   ] as const) {
     if (totals[key]) stats.push(`${label} ${formatTokens(totals[key])}`);
   }
-  if ((totals.cacheRead || totals.cacheWrite) && totals.cacheHitRate !== undefined) {
-    stats.push(`CH ${totals.cacheHitRate.toFixed(1)}%`);
+  const promptTokens = totals.input + totals.cacheRead + totals.cacheWrite;
+  if ((totals.cacheRead || totals.cacheWrite) && promptTokens > 0) {
+    stats.push(`CH ${((totals.cacheRead / promptTokens) * 100).toFixed(1)}%`);
   }
   if (timing.elapsedMs !== undefined) stats.push(`time ${(timing.elapsedMs / 1000).toFixed(1)}s`);
   return stats.join(", ");

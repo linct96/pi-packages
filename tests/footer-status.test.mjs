@@ -229,7 +229,7 @@ test("usage matches cumulative session billing, including tools, summaries, and 
   assert.equal(reads, 1);
 });
 
-test("TPS includes TTFT but excludes tool execution; response statistics render separately from the footer", (t) => {
+test("a complete run emits one snapshot, aggregating requests but excluding tools from TPS", (t) => {
   let now = 100;
   t.mock.method(performance, "now", () => now);
   const f = setup();
@@ -259,23 +259,10 @@ test("TPS includes TTFT but excludes tool execution; response statistics render 
   now = 13100;
   f.ctx.sessionManager.appendMessage({ role: "toolResult", content: [] });
   f.handlers.get("turn_end")({ messageEntryId, message }, f.ctx);
-  assert.equal(f.renders, 1);
-  assert.match(f.renderStats(), /^TPS 66\.7, TTFT 1\.00s, in 1\.0k, out 200, cr 3\.0k, /);
+  assert.equal(f.renders, 0, "tool turns never emit statistics");
+  assert.equal(f.renderStats(), "");
   assert.equal(footer.render(120).length, 1);
   assert.equal(message.durationMs, 3000, "native duration is not overwritten");
-  const entry = f.ctx.sessionManager.getLeafEntry();
-  const restored = setup();
-  assert.match(restored.renderStats(entry), /^TPS 66\.7, TTFT 1\.00s, /);
-  const stats = "TPS 66.7, TTFT 1.00s, in 1.0k, out 200, cr 3.0k, total 4.2k, CH 75.0%, time 13.0s";
-  assert.equal(entry.data.elapsedMs, 13000);
-  for (let width = 0; width <= 120; width++) {
-    const line = restored.renderStats(entry, width);
-    assert.ok(visibleWidth(line) <= width);
-    if (width >= stats.length) assert.equal(line, stats);
-    assert.doesNotMatch(line, /\$|%\//);
-  }
-  f.handlers.get("turn_end")({ messageEntryId, message }, f.ctx);
-  assert.equal(f.ctx.sessionManager.getEntries().filter((e) => e.type === "custom").length, 1);
 
   const finishResponse = () => {
     f.handlers.get("before_provider_request")({}, f.ctx);
@@ -291,26 +278,42 @@ test("TPS includes TTFT but excludes tool execution; response statistics render 
   now += 1000;
   f.handlers.get("before_agent_start")({}, f.ctx);
   finishResponse();
-  assert.match(
-    f.renderStats(),
-    /, time 15\.1s$/,
-    "tool continuations/retries keep the original run start",
-  );
-  assert.match(
-    restored.renderStats(entry),
-    /, time 13\.0s$/,
-    "older snapshots keep their elapsed time",
-  );
-  for (const reset of ["agent_settled", "session_tree", "session_shutdown", "session_start"]) {
+  f.handlers.get("agent_end")({}, f.ctx);
+  assert.equal(f.renders, 0, "even agent_end may be followed by automatic continuation");
+  now += 1000;
+  f.handlers.get("before_agent_start")({}, f.ctx);
+  finishResponse();
+  f.handlers.get("agent_end")({}, f.ctx);
+  assert.equal(f.renders, 0, "a final-looking answer followed by queued work is not final");
+  now += 1000;
+  f.handlers.get("agent_settled")({ aborted: false }, f.ctx);
+  assert.equal(f.renders, 1);
+  const entry = f.ctx.sessionManager.getLeafEntry();
+  const restored = setup();
+  const stats = "TPS 115.4, TTFT 1.00s, in 3.0k, out 600, cr 9.0k, total 13k, CH 75.0%, time 18.2s";
+  assert.equal(entry.data.requestMs, 5200);
+  assert.equal(entry.data.outputTokens, 600);
+  assert.equal(entry.data.elapsedMs, 18200);
+  for (let width = 0; width <= 120; width++) {
+    const line = restored.renderStats(entry, width);
+    assert.ok(visibleWidth(line) <= width);
+    if (width >= stats.length) assert.equal(line, stats);
+    assert.doesNotMatch(line, /\$|%\//);
+  }
+  f.handlers.get("agent_settled")({ aborted: false }, f.ctx);
+  assert.equal(f.ctx.sessionManager.getEntries().filter((e) => e.type === "custom").length, 1);
+  for (const reset of ["session_tree", "session_shutdown", "session_start"]) {
     f.handlers.get(reset)({}, f.ctx);
     now += 100000;
     f.handlers.get("before_agent_start")({}, f.ctx);
     finishResponse();
+    f.handlers.get("agent_settled")({ aborted: false }, f.ctx);
     assert.match(
       f.renderStats(),
-      /, time 1\.1s$/,
-      `${reset} resets elapsed time, excluding idle time`,
+      /^TPS 181\.8, TTFT 0\.10s, in 1\.0k, out 200, cr 3\.0k, total 4\.2k, CH 75\.0%, time 1\.1s$/,
+      `${reset} and settle reset run timing and usage, excluding idle time`,
     );
+    assert.equal(restored.renderStats(entry), stats, "older snapshots remain unchanged");
   }
 });
 
@@ -321,7 +324,12 @@ function appendTimedResponse(f, generationMs = 4000, ttftMs = 1000, extra = {}) 
     stopReason: "stop",
     ...extra,
   });
-  const data = { messageEntryId, generationMs, ttftMs };
+  const data = {
+    messageEntryId,
+    requestMs: generationMs + ttftMs,
+    ttftMs,
+    outputTokens: extra.usage?.output ?? usage().output,
+  };
   const stats = formatResponseStats(f.ctx.sessionManager.getEntries(), data);
   return f.ctx.sessionManager.appendCustomEntry("footer-status:timing", { ...data, stats });
 }
@@ -358,7 +366,7 @@ test("each response keeps its own snapshot across later replies, branches, and o
 
 test("invalid timings and failed or empty responses do not produce TPS or TTFT", () => {
   const f = setup();
-  for (const [generation, ttft, extra] of [
+  for (const [requestMs, ttft, extra] of [
     [undefined, 10, {}],
     [-1, 10, {}],
     [NaN, 10, {}],
@@ -382,8 +390,9 @@ test("invalid timings and failed or empty responses do not produce TPS or TTFT",
     });
     const stats = formatResponseStats(f.ctx.sessionManager.getEntries(), {
       messageEntryId: id,
-      generationMs: generation,
+      requestMs,
       ttftMs: ttft,
+      outputTokens: extra.usage?.output ?? usage().output,
     });
     assert.doesNotMatch(stats, /TPS|TTFT/);
   }
@@ -421,6 +430,7 @@ test("fresh requests, cancellation, and lifecycle resets cannot reuse a previous
     "session_shutdown",
   ]) {
     const f = setup();
+    f.handlers.get("before_agent_start")({}, f.ctx);
     f.handlers.get("before_provider_request")({}, f.ctx);
     now += 100;
     f.handlers.get("message_update")(
@@ -433,6 +443,7 @@ test("fresh requests, cancellation, and lifecycle resets cannot reuse a previous
     f.handlers.get("message_end")({ message }, f.ctx);
     const messageEntryId = f.ctx.sessionManager.appendMessage(message);
     f.handlers.get("turn_end")({ messageEntryId, message }, f.ctx);
+    f.handlers.get("agent_settled")({ aborted: false }, f.ctx);
     assert.equal(
       f.ctx.sessionManager.getEntries().filter((e) => e.type === "custom").length,
       0,
@@ -440,16 +451,23 @@ test("fresh requests, cancellation, and lifecycle resets cannot reuse a previous
     );
   }
   for (const type of ["text_delta", "thinking_delta", "toolcall_delta"]) {
-    for (const stopReason of ["stop", "aborted", "error"]) {
+    for (const stopReason of ["stop", "toolUse", "aborted", "error", "cancelAtSettle"]) {
       const f = setup();
+      f.handlers.get("before_agent_start")({}, f.ctx);
       f.handlers.get("before_provider_request")({}, f.ctx);
       now += 50;
       f.handlers.get("message_update")({ assistantMessageEvent: { type, delta: "first" } }, f.ctx);
       now += 1000;
-      const message = { role: "assistant", usage: usage(), stopReason };
+      const message = {
+        role: "assistant",
+        usage: usage(),
+        stopReason: stopReason === "cancelAtSettle" ? "stop" : stopReason,
+      };
       f.handlers.get("message_end")({ message }, f.ctx);
       const messageEntryId = f.ctx.sessionManager.appendMessage(message);
       f.handlers.get("turn_end")({ messageEntryId, message }, f.ctx);
+      assert.equal(f.renderStats(), "", "no statistics before settle");
+      f.handlers.get("agent_settled")({ aborted: stopReason === "cancelAtSettle" }, f.ctx);
       assert.equal(
         f.ctx.sessionManager.getEntries().filter((e) => e.type === "custom").length,
         stopReason === "stop" ? 1 : 0,
@@ -503,6 +521,7 @@ test("only TUI installs the footer; Git branch rerenders and disposal unsubscrib
     const message = { role: "assistant", usage: usage(), stopReason: "stop" };
     f.handlers.get("message_end")({ message }, ctx);
     f.handlers.get("turn_end")({ messageEntryId: "unused", message }, ctx);
+    f.handlers.get("agent_settled")({ aborted: false }, ctx);
   }
   assert.equal(f.ctx.sessionManager.getEntries().filter((e) => e.type === "custom").length, 0);
   assert.equal(factories.length, 0);
@@ -519,7 +538,7 @@ test("only TUI installs the footer; Git branch rerenders and disposal unsubscrib
   assert.equal(factories.length, 2);
 });
 
-test("real Pi SDK persists per-response timing without adding it to model context", async (t) => {
+test("real Pi SDK persists one snapshot per tool-using conversation without adding it to model context", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "footer-timing-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const ai = new URL("../../pi-ai/dist/", import.meta.resolve("@earendil-works/pi-coding-agent"));
@@ -550,6 +569,8 @@ test("real Pi SDK persists per-response timing without adding it to model contex
         /footer-status:timing|generationMs|ttftMs|elapsedMs/,
       );
       requests++;
+      assert.equal(appended.length, Math.floor((requests - 1) / 2), "no intermediate snapshots");
+      const useTool = requests % 2 === 1;
       const stream = createAssistantMessageEventStream();
       const message = {
         role: "assistant",
@@ -572,7 +593,16 @@ test("real Pi SDK persists per-response timing without adding it to model contex
         stream.push({ type: "text_delta", contentIndex: 0, delta: "hello", partial: message });
         await setImmediate();
         now = start + 3000;
-        stream.push({ type: "done", reason: "stop", message });
+        if (useTool) {
+          message.content.push({
+            type: "toolCall",
+            id: `footer-${requests}`,
+            name: "footer_test",
+            arguments: {},
+          });
+          message.stopReason = "toolUse";
+        }
+        stream.push({ type: "done", reason: message.stopReason, message });
         stream.end(message);
       };
       void emit().catch((error) =>
@@ -593,7 +623,22 @@ test("real Pi SDK persists per-response timing without adding it to model contex
     cwd: root,
     agentDir: root,
     settingsManager,
-    extensionFactories: [footerStatus],
+    extensionFactories: [
+      footerStatus,
+      (pi) => {
+        pi.registerTool({
+          name: "footer_test",
+          label: "Footer test",
+          description: "Offline timing test",
+          parameters: { type: "object", properties: {} },
+          execute: async () => {
+            assert.equal(appended.length, Math.floor((requests - 1) / 2));
+            now += 10000;
+            return { content: [{ type: "text", text: "tool done" }], usage: usage(2000) };
+          },
+        });
+      },
+    ],
     noSkills: true,
     noThemes: true,
     noContextFiles: true,
@@ -635,7 +680,7 @@ test("real Pi SDK persists per-response timing without adding it to model contex
   await session.prompt("again");
   await session.waitForIdle();
   assert.deepEqual(errors, []);
-  assert.equal(requests, 2);
+  assert.equal(requests, 4);
   const reopened = SessionManager.open(manager.getSessionFile());
   const timings = reopened
     .getEntries()
@@ -648,8 +693,9 @@ test("real Pi SDK persists per-response timing without adding it to model contex
   );
   for (const entry of timings) {
     assert.equal(entry.data.ttftMs, 1000);
-    assert.equal(entry.data.generationMs, 2000);
-    assert.equal(entry.data.elapsedMs, 3000);
+    assert.equal(entry.data.requestMs, 6000);
+    assert.equal(entry.data.outputTokens, 400);
+    assert.equal(entry.data.elapsedMs, 16000);
     assert.equal(reopened.getEntry(entry.data.messageEntryId).message.role, "assistant");
   }
   const f = setup();
@@ -658,11 +704,11 @@ test("real Pi SDK persists per-response timing without adding it to model contex
   const renderer = session.extensionRunner.getEntryRenderer("footer-status:timing");
   assert.equal(
     renderer(timings[0], {}, f.theme).render(120).map(strip).join(""),
-    "TPS 66.7, TTFT 1.00s, in 1.0k, out 200, cr 3.0k, total 4.2k, CH 75.0%, time 3.0s",
+    "TPS 66.7, TTFT 1.00s, in 4.0k, out 600, cr 9.0k, total 14k, CH 69.2%, time 16.0s",
   );
   assert.equal(
     renderer(timings[1], {}, f.theme).render(120).map(strip).join(""),
-    "TPS 66.7, TTFT 1.00s, in 2.0k, out 400, cr 6.0k, total 8.4k, CH 75.0%, time 3.0s",
+    "TPS 66.7, TTFT 1.00s, in 4.0k, out 600, cr 9.0k, total 14k, CH 69.2%, time 16.0s",
   );
   footer.dispose();
 });

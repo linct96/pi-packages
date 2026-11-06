@@ -3,7 +3,16 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { createFooterStatus, formatResponseStats, TIMING_ENTRY } from "./footer.ts";
 
 export default function footerStatus(pi: ExtensionAPI) {
-  let runStartedAt: number | undefined;
+  let run:
+    | {
+        startedAt: number;
+        entryOffset: number;
+        ttftMs?: number;
+        requestMs: number;
+        outputTokens: number;
+        messageEntryId?: string;
+      }
+    | undefined;
   let startedAt: number | undefined;
   let firstOutputAt: number | undefined;
   let pending: { ttftMs: number; generationMs: number } | undefined;
@@ -15,7 +24,7 @@ export default function footerStatus(pi: ExtensionAPI) {
   };
   const resetRun = () => {
     reset();
-    runStartedAt = undefined;
+    run = undefined;
   };
 
   pi.registerEntryRenderer<{ stats?: string }>(TIMING_ENTRY, (entry, _options, theme) => {
@@ -30,11 +39,18 @@ export default function footerStatus(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
-    if (ctx.mode === "tui") runStartedAt ??= performance.now();
+    if (ctx.mode !== "tui") return;
+    run ??= {
+      startedAt: performance.now(),
+      entryOffset: ctx.sessionManager.getEntries().length,
+      requestMs: 0,
+      outputTokens: 0,
+    };
   });
   pi.on("before_provider_request", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     reset();
+    if (run) run.messageEntryId = undefined;
     startedAt = performance.now();
   });
   pi.on("message_update", (event, ctx) => {
@@ -66,18 +82,45 @@ export default function footerStatus(pi: ExtensionAPI) {
     firstOutputAt = undefined;
   });
   pi.on("turn_end", (event, ctx) => {
-    if (ctx.mode !== "tui" || !pending) return;
-    const timing = pending;
+    if (ctx.mode !== "tui" || !run || event.message.role !== "assistant") return;
+    run.messageEntryId = undefined;
+    if (!pending) return;
+    run.ttftMs ??= pending.ttftMs;
+    run.requestMs += pending.ttftMs + pending.generationMs;
+    const output = event.message.usage.output;
+    if (output > 0 && Number.isFinite(output)) run.outputTokens += output;
+    if (!["toolUse", "error", "aborted"].includes(event.message.stopReason)) {
+      run.messageEntryId = event.messageEntryId;
+    }
     reset();
-    // TPS/TTFT exclude tools; elapsed time includes the whole run through this turn's tools.
-    const elapsedMs = runStartedAt === undefined ? undefined : performance.now() - runStartedAt;
-    const data = { messageEntryId: event.messageEntryId, ...timing, elapsedMs };
-    const stats = formatResponseStats(ctx.sessionManager.getEntries(), data);
+  });
+  pi.on("agent_end", reset);
+  pi.on("agent_settled", (event, ctx) => {
+    const timing = run;
+    resetRun();
+    if (
+      ctx.mode !== "tui" ||
+      event.aborted ||
+      !timing?.messageEntryId ||
+      timing.ttftMs === undefined
+    )
+      return;
+    // Only settle is final: agent_end may still be followed by retries or queued work.
+    const data = {
+      messageEntryId: timing.messageEntryId,
+      ttftMs: timing.ttftMs,
+      requestMs: timing.requestMs,
+      outputTokens: timing.outputTokens,
+      elapsedMs: performance.now() - timing.startedAt,
+    };
+    const stats = formatResponseStats(
+      ctx.sessionManager.getEntries().slice(timing.entryOffset),
+      data,
+    );
+    if (!stats) return;
     pi.appendEntry(TIMING_ENTRY, { ...data, stats });
     requestRender?.();
   });
-  pi.on("agent_end", reset);
-  pi.on("agent_settled", resetRun);
   pi.on("session_tree", resetRun);
   pi.on("session_shutdown", resetRun);
   pi.on("session_start", (_event, ctx) => {
