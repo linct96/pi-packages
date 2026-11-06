@@ -10,6 +10,8 @@
 
 ```bash
 pnpm install --frozen-lockfile --ignore-scripts
+pnpm format
+pnpm lint
 pnpm check
 pnpm test
 
@@ -24,6 +26,8 @@ pi -e .
 ```bash
 pi -e ./extensions/codex-setting/index.ts
 ```
+
+`pnpm format` 使用 Oxfmt 格式化代码与文档，`pnpm lint` 使用 Oxlint 检查代码，警告也视为失败。两者均排除未接入运行的 `extensions/gkd-workflow/pi-dev-workflow/` 参考源码；格式化另外跳过由 pnpm 管理的锁文件。
 
 `pnpm test` 使用 Node.js 内置测试运行器与 TypeScript 类型擦除，不依赖额外测试框架；部分 Node.js 版本会显示实验性类型擦除提示。
 
@@ -93,23 +97,23 @@ Priority 的可用性、速度与实际计费由账号及服务端决定；不�
 /gkd-judge-route 解释 React useEffect
 ```
 
-| 任务示例 | 预期路由 |
-| --- | --- |
-| 提交 A 项目已有修改 | DIRECT（执行前仍需核对项目、分支和差异） |
-| 运行 A 项目现有测试并报告结果 | DIRECT |
-| 强制推送或发布生产环境 | DIRECT（需要风险确认，不自动执行） |
-| 修复按钮颜色错误并提交 | FAST（开发任务，提交只是收尾） |
-| 解释如何提交代码 | NONE |
-| 修复按钮颜色错误 | FAST |
-| 修改单个组件的文案 | FAST |
-| 重构规则集的数据模型 | STANDARD |
-| 增加数据库迁移 | STANDARD |
-| 修改身份认证逻辑 | STANDARD |
-| 解释 React useEffect | NONE |
-| 按现有格式统一三个页面的按钮文案，并逐页检查 | FAST（影响已确认、无行为协调） |
-| 在两种状态管理方案中权衡后实施 | STANDARD |
-| 在数据库、服务端和客户端分阶段切换协议 | STANDARD |
-| 解释认证流程，不修改代码 | NONE |
+| 任务示例                                     | 预期路由                                 |
+| -------------------------------------------- | ---------------------------------------- |
+| 提交 A 项目已有修改                          | DIRECT（执行前仍需核对项目、分支和差异） |
+| 运行 A 项目现有测试并报告结果                | DIRECT                                   |
+| 强制推送或发布生产环境                       | DIRECT（需要风险确认，不自动执行）       |
+| 修复按钮颜色错误并提交                       | FAST（开发任务，提交只是收尾）           |
+| 解释如何提交代码                             | NONE                                     |
+| 修复按钮颜色错误                             | FAST                                     |
+| 修改单个组件的文案                           | FAST                                     |
+| 重构规则集的数据模型                         | STANDARD                                 |
+| 增加数据库迁移                               | STANDARD                                 |
+| 修改身份认证逻辑                             | STANDARD                                 |
+| 解释 React useEffect                         | NONE                                     |
+| 按现有格式统一三个页面的按钮文案，并逐页检查 | FAST（影响已确认、无行为协调）           |
+| 在两种状态管理方案中权衡后实施               | STANDARD                                 |
+| 在数据库、服务端和客户端分阶段切换协议       | STANDARD                                 |
+| 解释认证流程，不修改代码                     | NONE                                     |
 
 判断遵循 **Task Route Policy v2.1**（JSON 结构仍为 2.0）。先判断任务性质：纯解释、咨询、讨论为 `non_development → NONE`；仅执行现成操作、不涉及实现变更为 `operation → DIRECT`；需要新增、修改或修复实现（包括混合操作的请求）为 `development → FAST / STANDARD`。DIRECT 根据任务内容判断，不根据用户指令的语气判断。
 
@@ -131,15 +135,15 @@ DIRECT 表示无需开发流程，不是执行授权：执行前仍需核对目�
 
 只读调查仅在可信项目中启用，由主 Agent 按任务选择证据，不再预先截取前 250 个路径或文件开头 4 KiB：
 
-| `gkd_route_evidence.action` | 能力 |
-| --- | --- |
-| `find` | 在 `path` 指定的文件或目录内查找；可用项目根相对 glob `pattern`（如 `**/*.md`）筛选 |
-| `search` | 在指定范围内进行区分大小写的字面关键词搜索，返回 `路径:行号:内容`，不执行正则或 shell |
-| `read` | 按行读取源码、测试、需求／架构文档及配置；分页和截断复用 Pi 原生读取实现 |
-| `log` | 查看项目范围或指定文件的提交哈希、日期和标题 |
-| `show` | 读取指定提交中的单个历史文件 |
-| `diff` | 读取单文件差异：`revision`（默认 HEAD）与 `to`（默认工作区）；不包含未跟踪的新文件 |
-| `blame` | 查看单个已提交文件的行归属，不代表当前未提交内容 |
+| `gkd_route_evidence.action` | 能力                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------- |
+| `find`                      | 在 `path` 指定的文件或目录内查找；可用项目根相对 glob `pattern`（如 `**/*.md`）筛选   |
+| `search`                    | 在指定范围内进行区分大小写的字面关键词搜索，返回 `路径:行号:内容`，不执行正则或 shell |
+| `read`                      | 按行读取源码、测试、需求／架构文档及配置；分页和截断复用 Pi 原生读取实现              |
+| `log`                       | 查看项目范围或指定文件的提交哈希、日期和标题                                          |
+| `show`                      | 读取指定提交中的单个历史文件                                                          |
+| `diff`                      | 读取单文件差异：`revision`（默认 HEAD）与 `to`（默认工作区）；不包含未跟踪的新文件    |
+| `blame`                     | 查看单个已提交文件的行归属，不代表当前未提交内容                                      |
 
 `path` 默认为项目根（`read/show/diff/blame` 必填）；`revision/to` 仅接受提交哈希或 HEAD 及其祖先表达式（如 `HEAD~1`）；`revision` 默认 HEAD，`to` 省略时与工作区比较。`offset` 从 1 开始，`limit` 默认 100、最多 2000；查找／搜索／日志分别按结果或提交分页，其余按输出文本行分页。按返回提示继续读取，或缩小范围。搜索行和提交标题最多显示 2000 字符，完整源码请用 `read/show`。例如主 Agent 可先查找 `{"action":"find","pattern":"**/*.md"}`，再读取 `{"action":"read","path":"docs/requirements.md","offset":100,"limit":80}`。
 

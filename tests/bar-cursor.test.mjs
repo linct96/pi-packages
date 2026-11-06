@@ -65,7 +65,10 @@ test("loading is inert; TUI startup sets only the shape and shows one setup noti
   await cursor.start();
   assert.deepEqual(cursor.writes, ["\x1b[5 q"]);
   assert.deepEqual(cursor.notifications, [notice]);
-  assert.deepEqual((await readdir(cursor.agentDir)).sort(), ["bar-cursor-notice-shown", "settings.json"]);
+  assert.deepEqual((await readdir(cursor.agentDir)).sort(), [
+    "bar-cursor-notice-shown",
+    "settings.json",
+  ]);
   cursor.shutdown();
   cursor.shutdown();
   assert.deepEqual(cursor.writes, ["\x1b[5 q", "\x1b[0 q"]);
