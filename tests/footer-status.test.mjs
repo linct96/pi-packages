@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { join } from "node:path";
+import { join, parse, sep } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { setImmediate } from "node:timers/promises";
@@ -124,11 +124,11 @@ test("footer keeps billing/context/model and moves extension statuses to the sec
   assert.equal(lines.length, 2);
   assert.match(
     lines[0],
-    /^~\/project \(main\) • My session\s+\$0\.010 \| 8\.0%\/200k \| gpt-6\.1-sol \(sub\) • high$/,
+    /^~\/project \(main\)\s+\$0\.010 \| 8\.0%\/200k \| gpt-6\.1-sol \(sub\) • high$/,
   );
   assert.doesNotMatch(lines.join("\n"), /\$[\d.]+ \(sub\)|\(auto\)/);
   assert.equal(visibleWidth(lines[0]), 120);
-  assert.doesNotMatch(lines.join("\n"), /TPS|TTFT|↑|↓|CH/);
+  assert.doesNotMatch(lines.join("\n"), /TPS|TTFT|↑|↓|CH|My session/);
   assert.equal(lines[1], "| Codex Fast | | Model Probe | GKD Auto · on");
   assert.ok(!lines[1].includes("gpt-"));
   f.statuses.clear();
@@ -187,6 +187,55 @@ test("narrow layout preserves path/branch, then model, thinking, context, billin
   f.ctx.sessionManager.getCwd = () => join(process.env.HOME, "很长的中文项目路径");
   const longPath = "~/很长的中文项目路径";
   assert.equal(strip(f.footer.render(visibleWidth(longPath))[0]), longPath);
+
+  f.changeBranch("main");
+  const root = parse(process.cwd()).root;
+  const samples = [
+    [
+      join(process.env.HOME, "Developer", "github", "pi-packages"),
+      "~/Developer/github/pi-packages",
+      "~/D/g/pi-packages",
+    ],
+    [
+      join(process.env.HOME, ".worktrees", "🧪实验", "中文项目"),
+      "~/.worktrees/🧪实验/中文项目",
+      "~/.w/🧪/中文项目",
+    ],
+    [join(process.env.HOME, "Developer", "project") + sep, "~/Developer/project", "~/D/project"],
+    [join(root, "opt", "company", "demo"), `${root}opt/company/demo`, `${root}o/c/demo`],
+    [process.env.HOME, "~", "~"],
+    [root, root, root],
+  ];
+  for (const [cwd, expanded, abbreviated] of samples) {
+    f.ctx.sessionManager.getCwd = () => cwd;
+    const expandedLocation = `${expanded.replaceAll("/", sep)} (main)`;
+    const compactLocation = `${abbreviated.replaceAll("/", sep)} (main)`;
+    const expandedWidth = visibleWidth(expandedLocation) + 2 + visibleWidth(full);
+    const wideWidth = expandedWidth + 20;
+    assert.equal(strip(f.footer.render(expandedWidth)[0]), `${expandedLocation}  ${full}`);
+    if (expanded !== abbreviated) {
+      assert.ok(strip(f.footer.render(expandedWidth - 1)[0]).startsWith(compactLocation));
+    }
+    for (const right of [full, billing, context, info, model, ""]) {
+      const width = visibleWidth(compactLocation) + (right ? 2 + visibleWidth(right) : 0);
+      const expected = compactLocation + (right ? `  ${right}` : "");
+      assert.equal(strip(f.footer.render(width)[0]), expected);
+    }
+    assert.equal(
+      strip(f.footer.render(visibleWidth(abbreviated))[0]),
+      abbreviated.replaceAll("/", sep),
+    );
+    for (let width = 0; width <= wideWidth; width++) {
+      const line = f.footer.render(width)[0];
+      assert.ok(visibleWidth(line) <= width, `${cwd}: ${width}`);
+      assert.doesNotMatch(strip(line), /My session/);
+    }
+    assert.equal(
+      strip(f.footer.render(wideWidth)[0]).replace(/ {2,}/g, "  "),
+      `${expandedLocation}  ${full}`,
+      "widening restores the full path",
+    );
+  }
 });
 
 test("usage matches cumulative session billing, including tools, summaries, and abandoned branches", () => {
@@ -477,7 +526,7 @@ test("fresh requests, cancellation, and lifecycle resets cannot reuse a previous
   }
 });
 
-test("live model, thinking, session name, compaction setting, and context warning update", () => {
+test("live model, thinking, and context warning update while session names stay hidden", () => {
   const f = setup();
   f.setThinking("off");
   f.setSettings({ compaction: { enabled: false } });
@@ -493,7 +542,11 @@ test("live model, thinking, session name, compaction setting, and context warnin
   assert.match(strip(f.footer.render(120)[0]), /gpt-6\.1-sol \(api\) • thinking off$/);
   f.ctx.model = { provider: "local", id: "本地模型", reasoning: false, contextWindow: 64000 };
   f.ctx.sessionManager.appendSessionInfo("Renamed");
-  assert.match(strip(f.footer.render(120)[0]), /Renamed\s+\?\/128k \| 本地模型 \(local\)$/);
+  assert.match(
+    strip(f.footer.render(120)[0]),
+    /^~\/project \(main\)\s+\?\/128k \| 本地模型 \(local\)$/,
+  );
+  assert.doesNotMatch(strip(f.footer.render(120)[0]), /Renamed/);
   f.setUsage({ percent: 75, contextWindow: 64000 });
   assert.ok(f.footer.render(120)[0].includes("\x1b[33m75.0%/64k"));
   f.setUsage({ percent: 95, contextWindow: 64000 });

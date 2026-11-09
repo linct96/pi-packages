@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, parse, relative, resolve, sep } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -21,6 +21,22 @@ function singleLine(text: string): string {
     .replace(/[\r\n\t]/g, " ")
     .replace(/ +/g, " ")
     .trim();
+}
+
+function compactPath(path: string): string {
+  const { root } = parse(path);
+  const parts = path.slice(root.length).split(sep);
+  const last = parts.reduce((last, part, index) => (part ? index : last), -1);
+  return (
+    root +
+    parts
+      .map((part, index) =>
+        index === last || part === "~" || part.endsWith(":")
+          ? part
+          : [...part].slice(0, part.startsWith(".") ? 2 : 1).join(""),
+      )
+      .join(sep)
+  );
 }
 
 export const TIMING_ENTRY = "footer-status:timing";
@@ -144,9 +160,11 @@ export function createFooterStatus(
         }
       }
       const branch = footerData.getGitBranch();
-      const name = ctx.sessionManager.getSessionName();
       const path = singleLine(cwd);
-      const location = path + (branch ? ` (${singleLine(branch)})` : "");
+      const compact = compactPath(path);
+      const branchInfo = branch ? ` (${singleLine(branch)})` : "";
+      const location = path + branchInfo;
+      const compactLocation = compact + branchInfo;
       const model = ctx.model;
       const thinking = pi.getThinkingLevel();
       const modelId = model ? singleLine(model.id) : "no-model";
@@ -186,14 +204,14 @@ export function createFooterStatus(
           .map((field) => theme.fg("dim", field))
           .join(theme.fg("dim", " | ")),
       );
-      // Preserve path and branch before right-side fields; drop the session name first.
+      // Compact the path only when needed, before hiding right-side fields.
       const layouts = [
-        [location + (name ? ` • ${singleLine(name)}` : ""), rightLayouts[0]],
-        ...rightLayouts.map((right) => [location, right]),
-        [location, ""],
-        [path, ""],
+        [location, rightLayouts[0]],
+        ...rightLayouts.map((right) => [compactLocation, right]),
+        [compactLocation, ""],
+        [compact, ""],
       ];
-      let firstLine = truncateToWidth(path, width, "...");
+      let firstLine = truncateToWidth(compact, width, "...");
       for (const [left, right] of layouts) {
         const padding = width - visibleWidth(left) - visibleWidth(right);
         if (padding < (right ? 2 : 0)) continue;
