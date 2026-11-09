@@ -68,6 +68,8 @@ const hasConversation = (ctx: ExtensionContext) =>
 export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
   let state: ProbeState | undefined;
   let pendingConfig: ProbeConfig | undefined;
+  let models = parseProbeConfig(undefined).models;
+  const applies = (ctx: ExtensionContext) => !!ctx.model && models.includes(ctx.model.id);
   let enabled = false;
   let loading = true;
   let fault = false;
@@ -147,8 +149,10 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     if (ctx.hasUI) ctx.ui.notify(`Model Probe: ${text}`, error ? "error" : "info");
     else console.error(`Model Probe: ${text}`);
   }
-  function blocked() {
-    return loading || fault || (!!state && !["PASSED", "READY"].includes(state.phase));
+  function blocked(ctx: ExtensionContext) {
+    return (
+      applies(ctx) && (loading || fault || (!!state && !["PASSED", "READY"].includes(state.phase)))
+    );
   }
   function current(ctx: ExtensionContext, version = generation) {
     return version === generation && ctx.sessionManager.getSessionId() === liveSession;
@@ -234,7 +238,7 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     const version = generation;
     // shortcut: fire-and-forget Pi dispatch has no rejection callback; report a missing start after 10s.
     startupTimer = setTimeout(() => {
-      if (current(ctx, version) && blocked()) {
+      if (current(ctx, version) && blocked(ctx)) {
         ctx.abort();
         fail(ctx, reason, false);
       }
@@ -280,6 +284,7 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       config = parseProbeConfig((await readSettings(settingsPath)).modelProbe);
       if (!current(ctx, version)) return;
       enabled = config.enabled;
+      models = config.models;
     } catch (error) {
       if (!current(ctx, version)) return;
       loading = false;
@@ -308,6 +313,8 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     updateStatus(ctx);
     const conversation = hasConversation(ctx);
     loading = false;
+    // Out-of-scope models neither resume probes nor replay their pending tasks.
+    if (!applies(ctx)) return;
     if (stored?.type === "custom") {
       try {
         const saved = stored.data as ProbeState;
@@ -413,12 +420,20 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     if (ctx.mode === "tui") ctx.ui.setStatus(QUESTION, undefined);
   });
   pi.on("model_select", (_event, ctx) => {
-    if (!state || state.model === modelKey(ctx)) return;
+    if (!applies(ctx)) {
+      if (state && state.model !== modelKey(ctx)) {
+        stop();
+        persist(ctx, { phase: "FAILED", reason: "model_changed" });
+      }
+      return restore(ctx);
+    }
+    if (!state) return restore(ctx);
+    if (state.model === modelKey(ctx)) return;
     ctx.abort();
     fail(ctx, "model_changed", false);
   });
   pi.on("thinking_level_select", (_event, ctx) => {
-    if (!state || state.model === modelKey(ctx)) return;
+    if (!applies(ctx) || !state || state.model === modelKey(ctx)) return;
     ctx.abort();
     fail(ctx, "thinking_level_changed", false);
   });
@@ -426,7 +441,8 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     if (
       pendingConfig &&
       enabled &&
-      !blocked() &&
+      applies(ctx) &&
+      !blocked(ctx) &&
       event.source !== "extension" &&
       !event.streamingBehavior &&
       ctx.isIdle() &&
@@ -458,7 +474,7 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       deliveryAccepted = true;
       return;
     }
-    if (!blocked()) return;
+    if (!blocked(ctx)) return;
     if (state?.phase === "RESTARTING") {
       notify(ctx, "会话正在重建，本次输入未保存；请在新会话中重发。", true);
       return { action: "handled" };
@@ -506,7 +522,7 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       return;
     }
     if (deliveryAccepted && state?.phase === "DELIVERING") return;
-    if (blocked()) {
+    if (blocked(ctx)) {
       // Also catches custom-message and slash-command runs which bypass input handlers.
       ctx.abort();
       notify(ctx, "检测未通过，已阻止正常 Agent 回合（扩展命令本身不在此门禁内）。", true);
@@ -549,8 +565,10 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     if ("tools" in payload) payload.tools = [];
     return payload;
   });
-  pi.on("tool_call", () =>
-    blocked() ? { block: true, reason: "Model Probe has not passed", terminate: true } : undefined,
+  pi.on("tool_call", (_event, ctx) =>
+    blocked(ctx)
+      ? { block: true, reason: "Model Probe has not passed", terminate: true }
+      : undefined,
   );
   pi.on("message_end", (event, ctx) => {
     if (!current(ctx)) return;

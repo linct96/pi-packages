@@ -68,6 +68,13 @@ test("configuration and local Unicode/whitespace contains validation", () => {
   assert.equal(PROBE_ENTRY, "codex-settings:model-probe");
   assert.equal(HANDOFF_ENTRY, "codex-settings:model-probe-handoff");
   assert.equal(parseProbeConfig(undefined).enabled, false);
+  assert.deepEqual(parseProbeConfig(undefined).models, ["gpt-6.1-sol"]);
+  assert.deepEqual(parseProbeConfig({ enabled: true }).models, ["gpt-6.1-sol"]);
+  assert.deepEqual(parseProbeConfig({ enabled: true, models: [] }).models, []);
+  assert.deepEqual(
+    parseProbeConfig({ enabled: true, models: ["gpt-6.1-sol", " extra-model "] }).models,
+    ["gpt-6.1-sol", "extra-model"],
+  );
   assert.equal(parseProbeConfig({ enabled: true }).questions[0].answer, "高市早苗");
   assert.equal(
     parseProbeConfig({ enabled: true }).questions[0].question,
@@ -81,6 +88,7 @@ test("configuration and local Unicode/whitespace contains validation", () => {
     null,
     [],
     { enabled: 1 },
+    ...[null, "gpt-6.1-sol", {}, [null], [1], [" "]].map((models) => ({ enabled: true, models })),
     { enabled: true, questions: [] },
     { enabled: true, questions: [{ id: "a", question: "?", answer: " " }] },
     { ...config(), questions: [q, q] },
@@ -95,7 +103,7 @@ test("whole-file settings conflicts preserve custom questions and unknown fields
   const path = join(await directory(t), "settings.json");
   const original = {
     fast: false,
-    modelProbe: { ...config(), custom: "keep" },
+    modelProbe: { ...config(), models: ["gpt-6.1-sol", "extra-model"], custom: "keep" },
     unknown: { nested: true },
   };
   await writeFile(path, JSON.stringify(original));
@@ -204,7 +212,7 @@ async function harness(t, settings = config(), entries = []) {
     mode: "tui",
     hasUI: true,
     thinkingLevel: "high",
-    model: { provider: "test", api: "test", id: "current" },
+    model: { provider: "test", api: "test", id: "gpt-6.1-sol" },
     sessionManager: {
       getBranch: () => {
         assert.equal(stale, false);
@@ -489,8 +497,74 @@ test("panel log persistence failure stays visible and cannot dispatch a task", a
   assert.equal((await h.emit("tool_call", {})).block, true);
 });
 
-test("first-input trigger honors the current session toggle and ignores non-user input", async (t) => {
-  const h = await harness(t, { ...config(), enabled: false });
+test("first-input trigger honors the model allowlist and session toggle and ignores non-user input", async (t) => {
+  for (const mode of ["tui", "rpc", "print", "json"]) {
+    const skipped = await harness(t, { enabled: true });
+    skipped.ctx.mode = mode;
+    skipped.ctx.model.id = "gpt-6.1-sol-extra";
+    await skipped.emit("model_select");
+    assert.equal(await skipped.first("ordinary task", [image]), undefined);
+    assert.equal(await skipped.emit("tool_call"), undefined);
+    await skipped.emit("before_agent_start", { messageType: "user" });
+    assert.equal(skipped.ctx.aborts, 0);
+    assert.equal(skipped.sends.length, 0);
+    assert.equal(skipped.state, undefined);
+    skipped.ctx.model.id = "gpt-6.1-sol";
+    await skipped.emit("model_select");
+    assert.equal(
+      (await skipped.first()).action,
+      "handled",
+      "switching before first input can probe",
+    );
+    assert.equal(skipped.sends.length, 1);
+  }
+  const old = await harness(t);
+  old.ctx.model.id = "unlisted";
+  await old.emit("model_select");
+  old.entries.push({ type: "message", message: { role: "user", content: "already executed" } });
+  old.ctx.model.id = "gpt-6.1-sol";
+  await old.emit("model_select");
+  assert.equal(
+    await old.first(),
+    undefined,
+    "switching after conversation does not retroactively probe",
+  );
+  assert.equal(old.sends.length, 0);
+
+  const empty = await harness(t, { ...config(), models: [] });
+  assert.equal(await empty.first(), undefined);
+  assert.equal(await empty.emit("tool_call"), undefined);
+  assert.equal(empty.sends.length, 0);
+
+  const switched = await harness(t);
+  await switched.first("must not replay", [image]);
+  await switched.startAnswer();
+  const count = switched.sends.length;
+  switched.ctx.model.id = "unlisted";
+  switched.ctx.thinkingLevel = "off";
+  await switched.emit("thinking_level_select");
+  await switched.emit("model_select");
+  await switched.emit("agent_settled", { aborted: false });
+  for (const event of ["session_start", "session_tree"]) {
+    await switched.emit(event);
+    assert.equal(await switched.first("new task"), undefined);
+    assert.equal(await switched.emit("tool_call"), undefined);
+    await switched.emit("before_agent_start", { messageType: "user" });
+    assert.equal(switched.ctx.aborts, 0);
+    assert.equal(switched.sends.length, count);
+    assert.equal(switched.state.pendingMessage.text, "must not replay");
+  }
+  switched.ctx.model.id = "gpt-6.1-sol";
+  await switched.emit("model_select");
+  assert.equal(switched.state.phase, "FAILED", "switching back does not bypass a prior gate");
+  assert.equal((await switched.emit("tool_call")).block, true);
+  assert.equal(switched.sends.length, count);
+
+  const h = await harness(t, {
+    ...config(),
+    enabled: false,
+    models: ["gpt-6.1-sol", "selected-before-first-input"],
+  });
   h.probe.setEnabled(true, h.ctx);
   assert.equal(h.sends.length, 0);
   await h.emit("input", { text: "", source: "interactive" });
@@ -824,7 +898,11 @@ async function sdk(
     modelsPath: null,
     refreshOnCreate: false,
   });
-  const faux = fauxProvider({ provider: "openai-codex", tokensPerSecond: 100000 });
+  const faux = fauxProvider({
+    provider: "openai-codex",
+    tokensPerSecond: 100000,
+    models: [{ id: "gpt-6.1-sol" }],
+  });
   if (serialized) {
     const token = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "offline-test" } })).toString("base64url")}.test`;
     runtimeModel.registerProvider("openai-codex", {
@@ -1014,6 +1092,25 @@ test(
     assert.equal(h.faux.state.callCount, 4);
     assert.equal(stateOf(h.runtime.session.sessionManager).phase, "READY");
     assert.ok(h.runtime.session.getActiveToolNames().includes("write"));
+
+    const unlisted = await sdk(t, {
+      probeConfig: { ...config(), models: ["another-model-id"] },
+      responses: [
+        (context) => {
+          assert.match(getCurrentSystemPrompt(context.messages), /LATE BUSINESS SYSTEM SECRET/);
+          assert.ok(getCurrentTools(context.messages).some((tool) => tool.name === "write"));
+          assert.deepEqual(context.messages.filter((m) => m.role === "user").at(-1).content, [
+            { type: "text", text: "ordinary task" },
+            image,
+          ]);
+          return fauxAssistantMessage("no probe needed");
+        },
+      ],
+    });
+    await unlisted.first("ordinary task", [image]);
+    assert.equal(unlisted.faux.state.callCount, 1);
+    assert.equal(stateOf(unlisted.runtime.session.sessionManager), undefined);
+    assert.deepEqual(unlisted.errors, []);
   },
 );
 
@@ -1318,7 +1415,10 @@ test(
     t.after(() => {
       globalThis.fetch = originalFetch;
     });
-    const h = await sdk(t, { serialized: true });
+    const h = await sdk(t, {
+      serialized: true,
+      probeConfig: { ...config(), models: ["probe-model"] },
+    });
     assert.equal(wire.length, 0);
     await h.first("normal");
     assert.equal(

@@ -6,6 +6,7 @@ export interface ProbeQuestion {
 
 export interface ProbeConfig {
   enabled: boolean;
+  models: string[];
   questions: ProbeQuestion[];
   validation: { mode: "contains"; requireAll: true };
   isolation: { disableTools: true; clearSystemPrompt: true };
@@ -19,6 +20,7 @@ export function normalize(value: string): string {
 export function parseProbeConfig(value: unknown): ProbeConfig {
   const defaults: ProbeConfig = {
     enabled: false,
+    models: ["gpt-6.1-sol"],
     questions: [
       {
         id: "japan-pm",
@@ -35,9 +37,12 @@ export function parseProbeConfig(value: unknown): ProbeConfig {
     !!input && typeof input === "object" && !Array.isArray(input);
   const invalid = () =>
     new Error(
-      "Invalid modelProbe configuration: expected enabled:boolean, nonempty unique questions with id/question/answer, contains + requireAll, and enabled isolation/restart safeguards",
+      "Invalid modelProbe configuration: expected enabled:boolean, models:string[] with nonempty model IDs, nonempty unique questions with id/question/answer, contains + requireAll, and enabled isolation/restart safeguards",
     );
   if (!object(value) || typeof value.enabled !== "boolean") throw invalid();
+  const models = value.models === undefined ? defaults.models : value.models;
+  if (!Array.isArray(models) || models.some((id) => typeof id !== "string" || !id.trim()))
+    throw invalid();
   const questions = value.questions === undefined ? defaults.questions : value.questions;
   if (!Array.isArray(questions) || questions.length === 0) throw invalid();
   const ids = new Set<string>();
@@ -63,6 +68,7 @@ export function parseProbeConfig(value: unknown): ProbeConfig {
   return {
     ...defaults,
     enabled: value.enabled,
+    models: models.map((id) => id.trim()),
     questions: questions.map((q) => ({ id: q.id, question: q.question, answer: q.answer })),
   };
 }
