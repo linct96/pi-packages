@@ -3,7 +3,9 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import test from "node:test";
 import {
   registerJudgeRoute,
@@ -116,6 +118,15 @@ function router() {
 test("package exposes the workflow and standalone route debugging stays inert", async () => {
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.ok(manifest.pi.extensions.includes("./extensions/gkd-workflow/index.ts"));
+  assert.deepEqual(manifest.pi.skills, ["./extensions/gkd-workflow/gkd-pr"]);
+  assert.ok(manifest.files.includes("extensions"));
+  const skillDir = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-pr/", import.meta.url));
+  const discovered = loadSkillsFromDir({ dir: skillDir, source: "path" });
+  assert.deepEqual(discovered.diagnostics, []);
+  assert.deepEqual(
+    discovered.skills.map((skill) => [skill.name, skill.filePath]),
+    [["gkd-pr", join(skillDir, "SKILL.md")]],
+  );
   const app = router();
   assert.deepEqual([...app.commands.keys()], ["gkd-judge-route"]);
   assert.deepEqual(app.notifications, []);
@@ -130,6 +141,34 @@ test("package exposes the workflow and standalone route debugging stays inert", 
   );
   assert.equal(app.event("tool_call", { toolName: "write", input: {} }), undefined);
   assert.ok([...app.tools.values()].every((tool) => tool.defaultActive === false));
+});
+
+test("PR publication skill supplies both route-specific templates and safe remote checks", async () => {
+  const skill = await readFile(
+    new URL("../extensions/gkd-workflow/gkd-pr/SKILL.md", import.meta.url),
+    "utf8",
+  );
+  const fast = await readFile(
+    new URL("../extensions/gkd-workflow/gkd-pr/references/FAST.md", import.meta.url),
+    "utf8",
+  );
+  const standard = await readFile(
+    new URL("../extensions/gkd-workflow/gkd-pr/references/STANDARD.md", import.meta.url),
+    "utf8",
+  );
+  for (const phrase of [
+    "judge-route",
+    "GitHub",
+    "GitLab",
+    "gh pr create",
+    "glab mr create",
+    "authentication",
+    "Draft",
+  ]) {
+    assert.ok(skill.toLowerCase().includes(phrase.toLowerCase()), phrase);
+  }
+  assert.match(fast, /## Summary/);
+  assert.match(standard, /## STANDARD Rationale/);
 });
 
 test("debug dispatch loads Markdown policy and workflow relative to the module without replacing the system prompt", async () => {

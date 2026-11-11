@@ -281,6 +281,22 @@ pi -e .
 pi -e ./extensions/gkd-workflow/index.ts
 ```
 
+## GKD PR / MR Skill
+
+`extensions/gkd-workflow/gkd-pr/SKILL.md` 与 `/gkd` 的 `index.ts` 入口同级，通过 Pi Package 的 `pi.skills` 清单发现，亦可通过 `/skill:gkd-pr` 单独调用。它提供 FAST、STANDARD 两套 PR / MR 正文模板：
+
+- `extensions/gkd-workflow/gkd-pr/references/FAST.md`：变更摘要、实际验证和已知风险。
+- `extensions/gkd-workflow/gkd-pr/references/STANDARD.md`：额外记录背景、STANDARD 升级依据、重要设计权衡、分阶段实施及回滚方案。
+
+默认流程：
+
+1. 输入 `/gkd <任务>`，通过 `judge-route` 只读工具获得有效的 FAST / STANDARD / DIRECT / NONE 分类。
+2. 分类成功后恢复正常工具，主 Agent 执行任务；STANDARD 根据实际风险先完成必要计划与审批。
+3. 开发与验证后，若有任务相关提交、未被用户禁止发布，且存在可写且已认证的 GitHub 或 GitLab 远程仓库，按路由加载对应模板并尝试创建／更新 PR 或 MR。远程仓库不明确、凭据/工具不可用、提交或验证状态有问题时，保留本地改动并报告阻碍，绝不假报发布成功。
+4. DIRECT 仅在用户明确要求创建 PR/MR 时发布；NONE 不发布。并不自动合并 PR/MR。
+
+优先使用可用的仓库集成，也可使用已安装并认证的 `gh` 或 `glab` CLI。不会自动安装 CLI、获取凭据、强制推送或提交无关文件。模板中的测试勾选项仅标记实际通过的验证。Skill 和执行提示均为 Agent 指令，**不是一个独立的确定性发布服务**：最终创建取决于模型执行、仓库状态、可用工具和远程权限。
+
 ## 竖线光标
 
 `extensions/bar-cursor.ts` 仅将终端原生光标设为闪烁的竖线，不再开启、覆盖或恢复 Hardware cursor 设置；不替换编辑器、不挂载 widget，也不修改 Pi 的 `settings.json`。
@@ -321,6 +337,11 @@ extensions/
       index.ts         # 指令加载、调试命令、只读工具、安全校验与生命周期
       policy.md        # 分流原则、证据纪律与输出协议
       workflow.md      # 主 Agent 调查与结果提交步骤
+    gkd-pr/
+      SKILL.md         # PR/MR 发布 Skill
+      references/
+        FAST.md        # FAST 变更正文
+        STANDARD.md    # STANDARD 设计、风险与验证正文
 tests/
   bar-cursor.test.mjs
   footer-status.test.mjs
@@ -339,9 +360,8 @@ tsconfig.json          # 只做类型检查，不输出产物
 
 新增扩展时，在 `package.json` 的 `pi.extensions` 中显式列出入口，避免将辅助模块当作扩展加载。
 
-以下目录仅在需要时创建，并同步加入 `package.json` 的 `pi` 资源清单及 `files` 发布清单：
+`gkd-pr` 归属 `extensions/gkd-workflow/`，在 `package.json` 的 `pi.skills` 中显式列出技能目录，并随 `files` 中的 `extensions` 一起发布。其他资源目录在需要时创建，并同步更新清单：
 
-- `skills/<name>/SKILL.md`：模型工作指引与配套资源。
 - `prompts/<name>.md`：可复用提示词。
 - `themes/<name>.json`：主题。
 
@@ -361,3 +381,12 @@ Pi 宿主提供的库放在 `peerDependencies`，不要放进 `dependencies` 或
 
 - [Extensions](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md)
 - [Pi Packages](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
+
+## Pull Request 模板
+
+仓库提供两套 PR 正文模板，按 GKD 开发分流选择：
+
+- **[FAST](https://github.com/linct96/pi-packages/compare/main...main?expand=1&template=FAST.md)**：默认开发流程，记录变更摘要、影响范围、已完成的验证及已知风险。无需为了填写模板而引入正式设计/审批流程。
+- **[STANDARD](https://github.com/linct96/pi-packages/compare/main...main?expand=1&template=STANDARD.md)**：有明确复杂度/风险触发项的开发任务，补充背景、方案权衡、设计决策、分阶段计划、兼容性/安全/迁移、验证与回滚。可先建 Draft PR。
+
+模板源码位于 `.github/PULL_REQUEST_TEMPLATE/`。创建 PR 时可在比较页 URL 加 `?template=FAST.md` 或 `?template=STANDARD.md`（已有查询参数则使用 `&template=...`）。上方链接打开模板入口，实际创建时仍需选择包含代码修改的 head 分支。路由判断以 `extensions/gkd-workflow/judge-route/policy.md` 为准；DIRECT / NONE 不属于开发 PR 模式。
