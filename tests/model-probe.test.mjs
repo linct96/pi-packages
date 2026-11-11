@@ -47,6 +47,7 @@ const { getCurrentTools, getCurrentSystemPrompt } = await import(
 const config = (questions = [{ id: "one", question: "Question one?", answer: "ＡＢＣ" }]) => ({
   ...parseProbeConfig(undefined),
   enabled: true,
+  maxAttempts: 1, // Most cases exercise the manual failure gate without automatic restarts.
   questions,
 });
 const stateOf = (manager) =>
@@ -68,6 +69,10 @@ test("configuration and local Unicode/whitespace contains validation", () => {
   assert.equal(PROBE_ENTRY, "codex-settings:model-probe");
   assert.equal(HANDOFF_ENTRY, "codex-settings:model-probe-handoff");
   assert.equal(parseProbeConfig(undefined).enabled, false);
+  assert.equal(parseProbeConfig(undefined).maxAttempts, 3);
+  assert.equal(parseProbeConfig({ enabled: true }).maxAttempts, 3);
+  assert.equal(parseProbeConfig({ enabled: true, maxAttempts: 1 }).maxAttempts, 1);
+  assert.equal(parseProbeConfig({ enabled: true, maxAttempts: 5 }).maxAttempts, 5);
   assert.deepEqual(parseProbeConfig(undefined).models, ["gpt-6.1-sol"]);
   assert.deepEqual(parseProbeConfig({ enabled: true }).models, ["gpt-6.1-sol"]);
   assert.deepEqual(parseProbeConfig({ enabled: true, models: [] }).models, []);
@@ -88,6 +93,10 @@ test("configuration and local Unicode/whitespace contains validation", () => {
     null,
     [],
     { enabled: 1 },
+    ...[null, "3", 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].map((maxAttempts) => ({
+      enabled: true,
+      maxAttempts,
+    })),
     ...[null, "gpt-6.1-sol", {}, [null], [1], [" "]].map((models) => ({ enabled: true, models })),
     { enabled: true, questions: [] },
     { enabled: true, questions: [{ id: "a", question: "?", answer: " " }] },
@@ -103,7 +112,12 @@ test("whole-file settings conflicts preserve custom questions and unknown fields
   const path = join(await directory(t), "settings.json");
   const original = {
     fast: false,
-    modelProbe: { ...config(), models: ["gpt-6.1-sol", "extra-model"], custom: "keep" },
+    modelProbe: {
+      ...config(),
+      maxAttempts: 5,
+      models: ["gpt-6.1-sol", "extra-model"],
+      custom: "keep",
+    },
     unknown: { nested: true },
   };
   await writeFile(path, JSON.stringify(original));
@@ -414,8 +428,9 @@ test("TUI probe panel shows a concise status without logs or per-question verdic
   const view = (component = panel, width = 80) =>
     stripVTControlCharacters(component.render(width).join("\n"));
   assert.match(view(), /\[codex-settings:model-probe\]/);
-  assert.match(view().trimEnd(), /回答：（暂无有效回答）\s+检测中\.\.\.$/);
-  assert.match(view(), /问题：Q1\s+答案：yes\s+回答：（暂无有效回答）/);
+  assert.match(view().trimEnd(), /答案：yes\s+检测中\.\.\.$/);
+  assert.match(view(), /问题：Q1\s+答案：yes/);
+  assert.doesNotMatch(view(), /回答：|暂无有效回答/);
   assert.equal(question.display, true);
   await h.startAnswer("yes");
   await h.emit("agent_settled", { aborted: false });
@@ -454,6 +469,28 @@ test("TUI probe panel shows a concise status without logs or per-question verdic
   assert.match(view(restored).trimEnd(), /检测失败$/);
   assert.doesNotMatch(view(restored), /日志：|判定：|已有待处理消息/);
   assert.equal(h.sends.length, 2, "restoring the panel does not repeat the probe");
+
+  for (const attempt of [1, 2, 3]) {
+    const progress = await harness(t, { ...config(), maxAttempts: 3 }, [
+      { type: "custom", customType: HANDOFF_ENTRY, data: { attempt } },
+    ]);
+    const progressPanel = progress.renderers.get("codex-settings:model-probe")(
+      progress.sends[0],
+      { outputPad: 1 },
+      theme,
+    );
+    const text = view(progressPanel);
+    assert.ok(text.trimEnd().endsWith(`第 ${attempt}/3 轮检测中...`));
+    assert.doesNotMatch(text, /检测轮次：|回答：|暂无有效回答/);
+    assert.equal(text.match(/检测中/g)?.length, 1);
+    await progress.startAnswer("");
+    await progress.emit("agent_settled", { aborted: false });
+    assert.ok(view(progressPanel).trimEnd().endsWith(`第 ${attempt}/3 轮检测失败`));
+    assert.doesNotMatch(view(progressPanel), /回答：|暂无有效回答/);
+    for (const width of [20, 80]) {
+      for (const line of progressPanel.render(width)) assert.ok(visibleWidth(line) <= width);
+    }
+  }
 });
 
 test("TUI completion status distinguishes passed probes from explicit overrides", async (t) => {
@@ -777,18 +814,25 @@ test("provider error, cancellation, empty answers, interruption and model change
     ["", "stop", false, "empty_answer"],
     ["ABC", "length", false, "incomplete_response"],
   ]) {
-    const h = await harness(t);
+    const h = await harness(t, { ...config(), maxAttempts: 3 });
     await h.first();
     await h.startAnswer(text, stopReason);
     await h.emit("agent_settled", { aborted });
     assert.equal(h.state.phase, "FAILED");
     assert.match(h.state.reason, new RegExp(reason));
+    assert.equal(
+      h.sends.length,
+      aborted ? 1 : 2,
+      "cancellation must not trigger an automatic retry",
+    );
+    if (!aborted) assert.match(h.sends.at(-1).content, /^\/codex-probe-restart /);
   }
-  const interrupted = await harness(t);
+  const interrupted = await harness(t, { ...config(), maxAttempts: 3 });
   await interrupted.first();
   await interrupted.reload();
   assert.equal(interrupted.state.phase, "FAILED");
   assert.equal(interrupted.state.reason, "probe_interrupted");
+  assert.equal(interrupted.sends.length, 1, "reload must not restart an interrupted probe");
   const toolAttempt = await harness(t);
   await toolAttempt.first();
   await toolAttempt.startAnswer("ABC", "toolUse", {
@@ -842,6 +886,40 @@ test("old conversations, disabled defaults, changed configuration, forks and unc
   assert.equal(disabled.sends.length, 1, "session-only enablement applies to its first input");
   assert.equal(disabled.state.config.enabled, true);
   assert.equal(disabled.state.pendingMessage.text, "hi");
+  for (const attempt of [0, -1, 1.5, "2", Number.MAX_SAFE_INTEGER + 1]) {
+    const invalid = await harness(t, config(), [
+      { type: "custom", customType: HANDOFF_ENTRY, data: { attempt } },
+    ]);
+    assert.equal(invalid.sends.length, 0, "invalid handoff counters must not dispatch a probe");
+    assert.equal((await invalid.emit("tool_call")).block, true);
+  }
+  for (const selection of [
+    null,
+    { provider: "missing", id: "model", api: "test", thinkingLevel: "invalid" },
+    { provider: "missing", id: "model", api: "test", thinkingLevel: "high" },
+  ]) {
+    const invalid = await harness(t);
+    invalid.ctx.modelRegistry = { find: () => undefined };
+    invalid.entries.push({ type: "custom", customType: HANDOFF_ENTRY, data: { selection } });
+    await invalid.reload();
+    assert.equal(
+      invalid.sends.length,
+      0,
+      "unavailable or invalid selections must never use a fallback",
+    );
+    assert.equal((await invalid.emit("tool_call")).block, true);
+    assert.ok(invalid.notices.some(([text]) => text.includes("无法继承模型或思考级别")));
+  }
+  const invalidSaved = await harness(t);
+  await invalidSaved.first();
+  invalidSaved.entries.push({
+    type: "custom",
+    customType: PROBE_ENTRY,
+    data: { ...invalidSaved.state, attempt: 0 },
+  });
+  await invalidSaved.reload();
+  assert.equal(invalidSaved.sends.length, 1, "invalid saved counters must not resume a probe");
+  assert.equal((await invalidSaved.emit("tool_call")).block, true);
   assert.equal(
     (await readSettings(disabled.path)).modelProbe.enabled,
     false,
@@ -876,6 +954,7 @@ async function sdk(
     manager,
     serialized = false,
     persisted = false,
+    replacementSelection,
   } = {},
 ) {
   const root = await directory(t),
@@ -901,7 +980,10 @@ async function sdk(
   const faux = fauxProvider({
     provider: "openai-codex",
     tokensPerSecond: 100000,
-    models: [{ id: "gpt-6.1-sol" }],
+    models: [
+      { id: "gpt-6.1-sol", reasoning: !!replacementSelection },
+      ...(replacementSelection ? [{ id: replacementSelection.id, reasoning: true }] : []),
+    ],
   });
   if (serialized) {
     const token = `test.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "offline-test" } })).toString("base64url")}.test`;
@@ -972,8 +1054,12 @@ async function sdk(
       settingsManager,
       resourceLoader: loader,
       modelRuntime: runtimeModel,
-      model: selectedModel,
-      thinkingLevel: "high",
+      model:
+        replacementSelection && sessions.length
+          ? faux.getModel(replacementSelection.id)
+          : selectedModel,
+      thinkingLevel:
+        replacementSelection && sessions.length ? replacementSelection.thinkingLevel : "high",
       sessionManager,
       sessionStartEvent,
     });
@@ -1115,97 +1201,125 @@ test(
 );
 
 test(
-  "real Pi failure selection rebuilds sessions and delivers the original pending image task once",
+  "real Pi retries reset manual budgets, inherit model/thinking and deliver the image task once",
   { timeout: 20000 },
   async (t) => {
-    const answers = ["重新创建会话并发送消息", "重新创建会话并发送消息"];
-    let confirmations = 0,
-      delivery = 0;
-    let resolveDelivered;
-    const delivered = new Promise((resolve) => {
-      resolveDelivered = resolve;
-    });
-    const manager = SessionManager.inMemory(await directory(t));
-    manager.appendCustomEntry(`${PROBE_ENTRY}:setting`, { enabled: true });
-    const h = await sdk(t, {
-      manager,
-      probeConfig: { ...config(), enabled: false },
-      select: async () => {
-        confirmations++;
-        return answers.shift() ?? "取消";
-      },
-      onSession(session, n) {
-        if (n === 3)
-          session.subscribe((event) => {
-            if (
-              event.type === "agent_settled" &&
-              stateOf(session.sessionManager)?.pendingMessage?.delivery === "delivered"
-            )
-              resolveDelivered();
-          });
-      },
-      responses: [
-        fauxAssistantMessage("wrong"),
-        fauxAssistantMessage("wrong again"),
-        fauxAssistantMessage("ABC"),
-        (context) => {
-          delivery++;
-          assert.match(getCurrentSystemPrompt(context.messages), /LATE BUSINESS SYSTEM SECRET/);
-          const last = context.messages.filter((m) => m.role === "user").at(-1);
-          assert.deepEqual(last.content, [{ type: "text", text: "fix login" }, image]);
-          return fauxAssistantMessage("fixed");
+    for (const [maxAttempts, failures, expectedConfirmations] of [
+      [undefined, 2, 0],
+      [4, 3, 0],
+      [2, 3, 1],
+      [2, 4, 2],
+      [1, 2, 2],
+    ]) {
+      const answers = Array(expectedConfirmations).fill("重新创建会话并发送消息");
+      let confirmations = 0,
+        delivery = 0;
+      let resolveDelivered;
+      const delivered = new Promise((resolve) => {
+        resolveDelivered = resolve;
+      });
+      const manager = SessionManager.inMemory(await directory(t));
+      manager.appendCustomEntry(`${PROBE_ENTRY}:setting`, { enabled: true });
+      const h = await sdk(t, {
+        manager,
+        probeConfig: { ...config(), enabled: false, maxAttempts },
+        replacementSelection: { id: "fallback-model", thinkingLevel: "low" },
+        select: async () => {
+          confirmations++;
+          return answers.shift() ?? "取消";
         },
-      ],
-    });
-    assert.equal(h.faux.state.callCount, 0);
-    await h.runtime.session.prompt("fix login", { images: [image] });
-    await delivered;
-    await h.runtime.session.waitForIdle();
-    assert.equal(
-      h.sessions.length,
-      3,
-      JSON.stringify({ errors: h.errors, notices: h.notices, confirmations }),
-    );
-    assert.equal(confirmations, 2);
-    assert.equal(
-      delivery,
-      1,
-      JSON.stringify({
-        notices: h.notices,
-        errors: h.errors,
-        states: h.sessions.map((s) => stateOf(s.sessionManager)),
-      }),
-    );
-    assert.equal(stateOf(h.runtime.session.sessionManager).phase, "READY");
-    assert.equal(stateOf(h.runtime.session.sessionManager).pendingMessage.delivery, "delivered");
-    assert.ok(
-      h.runtime.session.sessionManager.getBranch().some((e) => e.customType === HANDOFF_ENTRY),
-    );
-    assert.deepEqual(h.errors, []);
-    await h.runtime.session.reload();
-    await h.runtime.session.waitForIdle();
-    assert.equal(delivery, 1);
-    assert.equal(h.faux.state.callCount, 4);
-    assert.equal(stateOf(h.sessions[0].sessionManager).pendingMessage.delivery, "transferred");
-    assert.equal(stateOf(h.sessions[1].sessionManager).pendingMessage.delivery, "transferred");
-    for (const session of h.sessions) {
-      const state = stateOf(session.sessionManager);
-      assert.equal(state.results.length, 1, "every replacement session is probed again");
-      assert.equal(state.pendingMessage.text, "fix login");
+        onSession(session, n) {
+          if (n === failures + 1)
+            session.subscribe((event) => {
+              if (
+                event.type === "agent_settled" &&
+                stateOf(session.sessionManager)?.pendingMessage?.delivery === "delivered"
+              )
+                resolveDelivered();
+            });
+        },
+        responses: [
+          ...Array.from({ length: failures }, () => fauxAssistantMessage("wrong")),
+          fauxAssistantMessage("ABC"),
+          (context) => {
+            delivery++;
+            assert.match(getCurrentSystemPrompt(context.messages), /LATE BUSINESS SYSTEM SECRET/);
+            const last = context.messages.filter((m) => m.role === "user").at(-1);
+            assert.deepEqual(last.content, [{ type: "text", text: "fix login" }, image]);
+            return fauxAssistantMessage("fixed");
+          },
+        ],
+      });
+      assert.equal(h.faux.state.callCount, 0);
+      await h.runtime.session.prompt("fix login", { images: [image] });
+      await delivered;
+      await h.runtime.session.waitForIdle();
       assert.equal(
-        state.config.enabled,
-        true,
-        "session-only enablement survives confirmed retries",
+        h.sessions.length,
+        failures + 1,
+        JSON.stringify({ errors: h.errors, notices: h.notices, confirmations }),
       );
-    }
-    for (const session of h.sessions.slice(0, 2)) {
+      assert.equal(confirmations, expectedConfirmations);
       assert.equal(
-        session.sessionManager
-          .getBranch()
-          .some((e) => e.type === "message" && e.message.role === "user"),
-        false,
-        "the original task is not run in a failed session",
+        delivery,
+        1,
+        JSON.stringify({
+          notices: h.notices,
+          errors: h.errors,
+          states: h.sessions.map((s) => stateOf(s.sessionManager)),
+        }),
       );
+      assert.equal(stateOf(h.runtime.session.sessionManager).phase, "READY");
+      assert.equal(stateOf(h.runtime.session.sessionManager).pendingMessage.delivery, "delivered");
+      assert.ok(
+        h.runtime.session.sessionManager.getBranch().some((e) => e.customType === HANDOFF_ENTRY),
+      );
+      assert.deepEqual(h.errors, []);
+      await h.runtime.session.reload();
+      await h.runtime.session.waitForIdle();
+      assert.equal(delivery, 1);
+      assert.equal(h.faux.state.callCount, failures + 2);
+      assert.equal(stateOf(h.sessions[0].sessionManager).pendingMessage.delivery, "transferred");
+      assert.equal(stateOf(h.sessions[1].sessionManager).pendingMessage.delivery, "transferred");
+      for (const [index, session] of h.sessions.entries()) {
+        const state = stateOf(session.sessionManager);
+        assert.equal(
+          state.attempt ?? 1,
+          (index % (maxAttempts ?? 3)) + 1,
+          "automatic retries increment; each confirmed restart resets the full budget",
+        );
+        assert.equal(state.results.length, 1, "every replacement session is probed again");
+        assert.equal(session.model.provider, "openai-codex");
+        assert.equal(
+          session.model.id,
+          "gpt-6.1-sol",
+          "never probe or deliver on the fallback model",
+        );
+        assert.equal(
+          session.thinkingLevel,
+          "high",
+          "inherit the session value, not the new default",
+        );
+        assert.equal(
+          state.model,
+          JSON.stringify(["openai-codex", "gpt-6.1-sol", session.model.api, "high"]),
+        );
+        assert.equal(state.pendingMessage.text, "fix login");
+        assert.equal(
+          state.config.enabled,
+          true,
+          "session-only enablement survives confirmed retries",
+        );
+      }
+      for (const session of h.sessions.slice(0, -1)) {
+        assert.equal(
+          session.sessionManager
+            .getBranch()
+            .some((e) => e.type === "message" && e.message.role === "user"),
+          false,
+          "the original task is not run in a failed session",
+        );
+      }
     }
   },
 );
@@ -1447,15 +1561,44 @@ test(
   "real Pi cancellation/no-UI failure cannot run normal input or /gkd bypass",
   { timeout: 20000 },
   async (t) => {
-    const h = await sdk(t, { gkd: true, responses: [fauxAssistantMessage("wrong")] });
-    await h.first("normal must wait");
+    let resolveFailed;
+    const failed = new Promise((resolve) => {
+      resolveFailed = resolve;
+    });
+    const h = await sdk(t, {
+      gkd: true,
+      persisted: true,
+      probeConfig: { ...config(), maxAttempts: 3 },
+      responses: Array.from({ length: 3 }, () => fauxAssistantMessage("wrong")),
+      onSession(session, n) {
+        if (n === 3)
+          session.subscribe((event) => {
+            if (event.type === "agent_settled") resolveFailed();
+          });
+      },
+    });
+    await h.runtime.session.prompt("normal must wait");
+    await failed;
+    await h.runtime.session.waitForIdle();
+    assert.equal(h.sessions.length, 3);
+    assert.equal(stateOf(h.runtime.session.sessionManager).attempt, 3);
     assert.equal(stateOf(h.runtime.session.sessionManager).phase, "FAILED");
     await h.runtime.session.prompt("do not overwrite");
     await h.runtime.session.prompt("/gkd change value.txt");
     await tick();
     await h.runtime.session.waitForIdle();
-    assert.equal(h.faux.state.callCount, 1);
+    assert.equal(h.faux.state.callCount, 3);
     assert.equal(stateOf(h.runtime.session.sessionManager).pendingMessage.text, "normal must wait");
+    const file = h.runtime.session.sessionFile;
+    await h.runtime.session.reload();
+    await h.runtime.switchSession(file);
+    await h.runtime.session.waitForIdle();
+    assert.equal(
+      h.faux.state.callCount,
+      3,
+      "reload/resume must not reset the exhausted retry budget",
+    );
+    assert.equal(stateOf(h.runtime.session.sessionManager).attempt, 3);
     assert.deepEqual(h.errors, []);
   },
 );

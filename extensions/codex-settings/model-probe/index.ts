@@ -19,6 +19,16 @@ interface PendingMessage {
   images: ImageContent[];
   delivery: "pending" | "delivering" | "delivered" | "transferred";
 }
+interface ProbeHandoff {
+  pendingMessage?: PendingMessage;
+  attempt?: number;
+  selection?: {
+    provider: string;
+    id: string;
+    api: string;
+    thinkingLevel: NonNullable<ExtensionContext["thinkingLevel"]>;
+  };
+}
 interface ProbeState {
   version: 1;
   sessionId: string;
@@ -27,6 +37,7 @@ interface ProbeState {
   config: ProbeConfig;
   model: string;
   index: number;
+  attempt?: number;
   results: ReturnType<typeof validateAnswer>[];
   pendingMessage?: PendingMessage;
   reason?: string;
@@ -53,6 +64,8 @@ function validPending(value: unknown): value is PendingMessage {
   );
 }
 
+const validAttempt = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const modelKey = (ctx: ExtensionContext) =>
   JSON.stringify([ctx.model?.provider, ctx.model?.id, ctx.model?.api, ctx.thinkingLevel]);
@@ -79,7 +92,8 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     | { runId: string; index: number; started: boolean; answer?: string; error?: string }
     | undefined;
   let deliveryAccepted = false;
-  let restartToken: string | undefined;
+  let restartToken: { token: string; attempt: number } | undefined;
+  let restoringSelection = false;
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
   let confirmation: AbortController | undefined;
   let promptOptions: { forceSystemPrompt?: string } | undefined;
@@ -112,16 +126,17 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
           for (const [index, question] of report.config.questions.entries()) {
             if (index > report.index) break;
             const result = report.results.find((item) => item.questionId === question.id);
-            lines.push(
-              "",
-              `问题：${question.question}`,
-              `答案：${question.answer}`,
-              `回答：${result?.actual || "（暂无有效回答）"}`,
-            );
+            lines.push("", `问题：${question.question}`, `答案：${question.answer}`);
+            if (result?.actual) lines.push(`回答：${result.actual}`);
           }
         }
         if (report?.reason) lines.push("", `原因：${report.reason}`);
-        lines.push("", status);
+        lines.push(
+          "",
+          report && report.config.maxAttempts > 1
+            ? `第 ${report.attempt ?? 1}/${report.config.maxAttempts} 轮${status}`
+            : status,
+        );
         body.setText(theme.fg("customMessageText", stripVTControlCharacters(lines.join("\n"))));
         return box.render(width);
       },
@@ -178,6 +193,15 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     confirmation?.abort();
     confirmation = undefined;
   }
+  function requestRestart(ctx: ExtensionContext, attempt = 1) {
+    if (!state || state.phase !== "FAILED" || fault || !current(ctx) || restartToken) return;
+    restartToken = { token: randomUUID(), attempt };
+    try {
+      pi.sendUserMessage(`/${RESTART} ${restartToken.token}`, { expandPromptTemplates: true });
+    } catch (error) {
+      fail(ctx, `restart_dispatch_failed: ${errorText(error)}`, false);
+    }
+  }
   async function offerFailureAction(ctx: ExtensionContext) {
     if (
       !state ||
@@ -197,8 +221,7 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       if (controller.signal.aborted || !current(ctx, version) || state?.phase !== "FAILED" || fault)
         return;
       if (choice === options[0]) {
-        restartToken = randomUUID();
-        pi.sendUserMessage(`/${RESTART} ${restartToken}`, { expandPromptTemplates: true });
+        requestRestart(ctx);
       } else if (choice === options[1]) {
         persist(ctx, { reason: "user_override" });
         notify(ctx, "已选择继续当前会话，跳过本次检测失败并发送原消息。");
@@ -312,6 +335,50 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     config = { ...config, enabled };
     updateStatus(ctx);
     const conversation = hasConversation(ctx);
+    if (!stored && handoff?.type === "custom") {
+      try {
+        const selection = (handoff.data as ProbeHandoff)?.selection;
+        if (selection !== undefined) {
+          if (
+            !selection ||
+            ![selection.provider, selection.id, selection.api].every(
+              (value) => typeof value === "string" && !!value,
+            ) ||
+            !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+              selection.thinkingLevel,
+            )
+          )
+            throw new Error("Invalid handoff selection");
+          restoringSelection = true;
+          if (
+            ctx.model?.provider !== selection.provider ||
+            ctx.model.id !== selection.id ||
+            ctx.model.api !== selection.api
+          ) {
+            const model = ctx.modelRegistry.find(selection.provider, selection.id);
+            if (!model || model.api !== selection.api || !(await pi.setModel(model)))
+              throw new Error("Handoff model unavailable");
+          }
+          if (!current(ctx, version)) return;
+          pi.setThinkingLevel(selection.thinkingLevel);
+          if (
+            ctx.model?.provider !== selection.provider ||
+            ctx.model.id !== selection.id ||
+            ctx.model.api !== selection.api ||
+            (ctx.thinkingLevel ?? pi.getThinkingLevel()) !== selection.thinkingLevel
+          )
+            throw new Error("Handoff model or thinking level unavailable");
+        }
+      } catch (error) {
+        if (!current(ctx, version)) return;
+        loading = false;
+        fault = true;
+        notify(ctx, `无法继承模型或思考级别，未执行检测或原任务：${errorText(error)}`, true);
+        return;
+      } finally {
+        restoringSelection = false;
+      }
+    }
     loading = false;
     // Out-of-scope models neither resume probes nor replay their pending tasks.
     if (!applies(ctx)) return;
@@ -339,6 +406,8 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
           saved.index >= parseProbeConfig(saved.config).questions.length
         )
           throw new Error("Invalid saved probe state");
+        if (saved.attempt !== undefined && !validAttempt(saved.attempt))
+          throw new Error("Invalid saved probe attempt");
         if (saved.pendingMessage !== undefined && !validPending(saved.pendingMessage))
           throw new Error("Invalid pending message");
         if (
@@ -393,8 +462,11 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     };
     try {
       if (handoff?.type === "custom") {
-        const data = handoff.data as { pendingMessage?: PendingMessage };
+        const data = handoff.data as ProbeHandoff;
         if (!data || typeof data !== "object") throw new Error("Invalid handoff");
+        if (data.attempt !== undefined && !validAttempt(data.attempt))
+          throw new Error("Invalid handoff attempt");
+        state.attempt = data.attempt ?? 1;
         const pending = data.pendingMessage;
         if (pending !== undefined && (!validPending(pending) || pending.delivery !== "pending"))
           throw new Error("Invalid handoff");
@@ -420,6 +492,7 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     if (ctx.mode === "tui") ctx.ui.setStatus(QUESTION, undefined);
   });
   pi.on("model_select", (_event, ctx) => {
+    if (restoringSelection) return;
     if (!applies(ctx)) {
       if (state && state.model !== modelKey(ctx)) {
         stop();
@@ -433,7 +506,7 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     fail(ctx, "model_changed", false);
   });
   pi.on("thinking_level_select", (_event, ctx) => {
-    if (!applies(ctx) || !state || state.model === modelKey(ctx)) return;
+    if (restoringSelection || !applies(ctx) || !state || state.model === modelKey(ctx)) return;
     ctx.abort();
     fail(ctx, "thinking_level_changed", false);
   });
@@ -628,7 +701,20 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       : validateAnswer(state.config.questions[run.index], run.answer ?? "");
     persist(ctx, { results: [...state.results, result] });
     if (!result.passed) {
-      await fail(ctx, result.reason ?? "answer_mismatch");
+      fail(ctx, result.reason ?? "answer_mismatch", false);
+      if (
+        !fault &&
+        result.reason !== "aborted" &&
+        applies(ctx) &&
+        modelKey(ctx) === state.model &&
+        (state.attempt ?? 1) < state.config.maxAttempts
+      ) {
+        notify(
+          ctx,
+          `自动新建会话重测（第 ${(state.attempt ?? 1) + 1}/${state.config.maxAttempts} 轮）。`,
+        );
+        requestRestart(ctx, (state.attempt ?? 1) + 1);
+      } else await offerFailureAction(ctx);
       return;
     }
     if (run.index + 1 < state.config.questions.length) {
@@ -641,11 +727,27 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     }
   });
   pi.registerCommand(RESTART, {
-    description: "Internal confirmed Model Probe session restart",
+    description: "Internal Model Probe session restart",
     handler: async (args, ctx) => {
-      if (!restartToken || args !== restartToken || state?.phase !== "FAILED" || !current(ctx))
+      if (
+        !restartToken ||
+        args !== restartToken.token ||
+        state?.phase !== "FAILED" ||
+        !current(ctx)
+      )
         return;
+      const { attempt } = restartToken;
       restartToken = undefined;
+      if (!ctx.model) {
+        fail(ctx, "model_missing", false);
+        return;
+      }
+      const selection: ProbeHandoff["selection"] = {
+        provider: ctx.model.provider,
+        id: ctx.model.id,
+        api: ctx.model.api,
+        thinkingLevel: ctx.thinkingLevel ?? pi.getThinkingLevel(),
+      };
       const pending =
         state.pendingMessage?.delivery === "pending" ? state.pendingMessage : undefined;
       const version = generation;
@@ -657,7 +759,11 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
         const result = await ctx.newSession({
           setup: async (manager) => {
             manager.appendCustomEntry(`${PROBE_ENTRY}:setting`, { enabled: true });
-            manager.appendCustomEntry(HANDOFF_ENTRY, { pendingMessage: pending });
+            manager.appendCustomEntry(HANDOFF_ENTRY, {
+              pendingMessage: pending,
+              attempt,
+              selection,
+            });
           },
         });
         // A successful replacement invalidates this entire instance. Never touch it afterwards.
