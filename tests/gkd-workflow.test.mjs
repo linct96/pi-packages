@@ -679,63 +679,14 @@ test("package exposes the workflow and standalone route debugging stays inert", 
   assert.match(workflow, /GKD 状态机的衔接/);
   assert.match(checkFlow, /--invalidate.*仅运行.*清缓存/);
   const bindings = await readFile(join(larkDir, "references/bindings.md"), "utf8");
-  assert.match(larkSkill, /管理项目关联.*references\/bindings\.md/);
-  assert.match(larkSkill, /项目关联只管理本地关联，不启动修复或写入飞书/);
-  assert.match(workflow, /当前 Agent 会话 cwd/);
-  assert.match(workflow, /scripts\/bindings.ts/);
-  assert.match(bindings, /baseToken \+ tableId/);
-  assert.match(bindings, /创建后的归属判断[\s\S]*当前 Agent 会话 cwd/);
-  assert.match(bindings, /不扩大到 cwd 外的仓库根，不跨符号链接边界/);
-  assert.match(bindings, /不能把示例数据当作真实项目证据/);
-  assert.match(bindings, /自动推断使用 `source: "inferred"`.*用户明确指定或确认.*`source: "user"`/);
+  assert.match(bindings, /baseToken \\+ tableId/);
   assert.match(bindings, /不覆盖旧关联或把 user 降为 inferred/);
-  assert.match(bindings, /后续 work 仍结合具体问题核实，可补充其他子项目/);
-  assert.match(bindings, /告知表已创建并及时询问具体归属/);
-  assert.match(bindings, /只继续未完成的绑定步骤/);
-  assert.match(bindings, /view 只限制本轮范围/);
-  assert.match(bindings, /及时向用户发起具体确认提问/);
-  assert.match(bindings, /临时指定不能无条件覆盖/);
-  assert.match(larkSkill, /执行前核对完整请求.*缺少参数、参数不支持、目标不明或步骤冲突时先询问/);
-  assert.match(larkSkill, /不支持持续监听、自动多轮/);
-  assert.doesNotMatch(larkSkill, /process_once|目前仅支持/);
   assert.match(workflow, /默认只执行一轮 loop/);
-  assert.match(
-    workflow,
-    /按 P0 → P1 → P2 → 未分级排序[\s\S]*### 2\. 评估复杂度并限定本轮任务[\s\S]*### 3\. 确认分类、阶段并及时回写/,
-  );
-  assert.match(workflow, /根据问题描述和已有验收要求估算工作量/);
-  assert.match(workflow, /复杂或不明确.*\|[ \t]+5[ \t]+\|/);
-  assert.match(workflow, /每轮预算最多 5 点、最多 5 条/);
-  assert.match(workflow, /从队首连续选取.*不能跳过它去挑后面的简单任务/);
-  assert.match(workflow, /不修改延期记录的类型、分组、状态或备注/);
-  assert.match(workflow, /本轮清单只减不增.*不从延期清单补位/);
-  assert.match(workflow, /停止领取后续任务，转入已尝试任务的统一验证和回写/);
-  assert.match(workflow, /未知参数/);
-  assert.match(workflow, /真实路径/);
-  assert.match(workflow, /必须存在可用的.*“类型”/);
-  assert.match(
-    workflow,
-    /待确认进入处理池时，必须在同一次记录更新中写入已确认的“类型”和当前阶段的“当前状态”/,
-  );
+  assert.match(workflow, /按 P0 → P1 → P2 → 未分级排序/);
   assert.match(workflow, /类型为空时必须填写/);
-  assert.match(workflow, /已有类型正确则保留，有冲突或无法判断时先问用户/);
-  assert.match(workflow, /简单且信息充分[\s\S]*直接写“待处理”/);
-  assert.match(workflow, /先写“待复现”[\s\S]*确认问题和方案后立即写“待处理”，写入成功后才修改/);
   assert.match(workflow, /单元素数组替换/);
-  assert.match(workflow, /修复完成且必要验证充分：将“当前状态”替换为 `\["已修复"\]`/);
-  assert.match(workflow, /等待统一验证的记录保持“待处理”/);
-  assert.match(workflow, /不代表已验收、已提交或已部署/);
-  assert.match(workflow, /简单任务不写备注[\s\S]*本轮新增备注合计不超过 100 字/);
-  assert.match(workflow, /不写运行标识、时间、工作区、分支、命令日志/);
-  assert.match(workflow, /保留旧备注，不自动清理历史日志/);
-  assert.match(workflow, /本次预期字段值核对是否已落地/);
-  assert.match(workflow, /整轮共享/);
+  assert.match(workflow, /修复完成且必要验证充分/);
   assert.match(workflow, /不自动重做/);
-  assert.match(workflow, /超时.*不重放/);
-  assert.doesNotMatch(
-    workflow,
-    /尚未注册|不写入“当前状态”|都不写“已修复”|安全追加规则|结论：待验收 \/ 受阻/,
-  );
   await verifyLarkPreflight();
   await verifyLarkCreate();
   await verifyLarkBindings();

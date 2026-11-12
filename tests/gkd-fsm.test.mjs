@@ -165,6 +165,7 @@ function harness(cwd, options = {}) {
       await commands.get("gkd-workloop").handler("Change the stored value to after", ctx);
       assert.equal(messages.at(-1), "/skill:gkd-workloop Change the stored value to after");
       await invoke("gkd_workloop_start", { kind: "development" });
+      await event("agent_settled", { aborted: false });
       assert.equal(state().phase, "ROUTING");
       await invoke("gkd_judge_route", { response: JSON.stringify(rawRoute(standard)) });
     },
@@ -377,7 +378,9 @@ test("only user cancellation ends the task, without undoing code or starting par
 test("NONE/DIRECT exit development control and routing failures block instead of completing", async () => {
   for (const operation of [false, true]) {
     const app = harness(await project());
-    await app.commands.get("gkd").handler("ordinary request", app.ctx);
+    await app.commands.get("gkd-workloop").handler("ordinary request", app.ctx);
+    await app.invoke("gkd_workloop_start", { kind: "development" });
+    await app.event("agent_settled", { aborted: false });
     const raw = rawRoute();
     raw.intent = operation ? "operation" : "non_development";
     raw.route = operation ? "DIRECT" : "NONE";
@@ -388,7 +391,9 @@ test("NONE/DIRECT exit development control and routing failures block instead of
     assert.deepEqual(app.activeTools(), originalTools);
   }
   const app = harness(await project());
-  await app.commands.get("gkd").handler("task", app.ctx);
+  await app.commands.get("gkd-workloop").handler("task", app.ctx);
+  await app.invoke("gkd_workloop_start", { kind: "development" });
+  await app.event("agent_settled", { aborted: false });
   await app.invoke("gkd_judge_route", { response: "invalid" });
   assert.equal(app.state().phase, "BLOCKED");
   await app.event("agent_settled");

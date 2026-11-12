@@ -105,6 +105,9 @@ test(
             }),
           );
         const steps = [
+          ...(!auto
+            ? [() => fauxAssistantMessage(fauxToolCall("gkd_workloop_start", { kind: "development" }))]
+            : []),
           (context) => {
             assert.match(
               JSON.stringify(context.messages.filter((message) => message.role === "system")),
