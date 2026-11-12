@@ -766,7 +766,7 @@ export function registerJudgeRoute(
     if (inlinePrompt === undefined)
       pi.sendUserMessage(
         active.prompt,
-        queueWhenBusy ? { streamingBehavior: "followUp" } : undefined,
+        queueWhenBusy ? { deliverAs: "followUp" } : undefined,
       );
   }
   return { start, stop: restoreTools, isActive: () => !!active };
