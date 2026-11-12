@@ -1,0 +1,54 @@
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+/** Keep the slash command free of business logic; the main Skill performs semantic routing. */
+export function registerWorkloopCommand(
+  pi: ExtensionAPI,
+  prepare: (input: string, ctx: ExtensionContext) => false | void | (() => void) = () => {},
+) {
+  pi.registerCommand("gkd-workloop", {
+    description:
+      "统一工作流：开发任务、飞书问题表、check-lark、create-lark-table；支持自然语言",
+    handler: async (args, ctx) => {
+      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+        pi.sendMessage(
+          {
+            customType: "gkd-workloop",
+            content: "操作未开始：Agent 正忙或存在待处理消息，请在当前任务结束后重新调用。",
+            display: true,
+          },
+          { triggerTurn: false },
+        );
+        return;
+      }
+      let rollback: void | (() => void);
+      try {
+        const input = args.trim();
+        const result = prepare(input, ctx);
+        if (result === false) {
+          ctx.ui.notify("已有 GKD 任务尚未结束；请先恢复或取消当前任务。", "warning");
+          return;
+        }
+        rollback = result;
+        pi.sendMessage(
+          {
+            customType: "gkd-workloop-context",
+            content: `\n\n[gkd-workloop 当前会话]\n${JSON.stringify({ cwd: ctx.cwd })}`,
+            display: false,
+          },
+          { triggerTurn: false },
+        );
+        pi.sendUserMessage(`/skill:gkd-workloop ${input}`, { expandPromptTemplates: true });
+      } catch {
+        rollback?.();
+        pi.sendMessage(
+          {
+            customType: "gkd-workloop",
+            content: "分发未完成：请检查当前会话状态后重新调用 /gkd-workloop。",
+            display: true,
+          },
+          { triggerTurn: false },
+        );
+      }
+    },
+  });
+}

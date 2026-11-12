@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { registerWorkloopCommand } from "./command.ts";
 import { registerJudgeRoute } from "./judge-route/index.ts";
 import {
   loadState,
@@ -20,9 +21,18 @@ import {
 } from "./state.ts";
 
 const INSTRUCTIONS = readFileSync(new URL("./workflow.md", import.meta.url), "utf8").trim();
+const LARK_GUIDE = readFileSync(new URL("./integrations/lark/gkd.md", import.meta.url), "utf8").trim();
 const ENTRY = "gkd-task";
 const REPORT = "gkd_report";
 const EVIDENCE = "gkd_route_evidence";
+const START = "gkd_workloop_start";
+const startSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("development") }, { additionalProperties: false }),
+  Type.Object(
+    { kind: Type.Literal("lark-work"), details: reportTextSchema },
+    { additionalProperties: false },
+  ),
+]);
 const base = { taskId: Type.String(), planVersion: Type.Integer({ minimum: 0 }) };
 const reportSchema = Type.Union([
   Type.Object(
@@ -63,6 +73,8 @@ export function registerWorkflow(
   let promptController = new AbortController();
   let nudged = false;
   let draining = false;
+  let bridgeHandoff = false;
+  let pending: { sessionId: string; cwd: string; request: string } | undefined;
   const owns = (ctx: ExtensionContext) =>
     !!state && state.sessionId === ctx.sessionManager.getSessionId();
   const running = (ctx: ExtensionContext) => engaged && owns(ctx);
@@ -120,7 +132,10 @@ export function registerWorkflow(
   }
   function describe() {
     const page = truncateHead(
-      INSTRUCTIONS + "\n\nCurrent GKD task:\n" + JSON.stringify(state, null, 2),
+      INSTRUCTIONS +
+        (state?.origin === "lark" ? "\n\n" + LARK_GUIDE : "") +
+        "\n\nCurrent GKD task:\n" +
+        JSON.stringify(state, null, 2),
     );
     return (
       page.content +
@@ -176,12 +191,17 @@ export function registerWorkflow(
     return true;
   }
 
-  function start(task: string, ctx: ExtensionContext, inlinePrompt?: string) {
+  function start(
+    task: string,
+    ctx: ExtensionContext,
+    inlinePrompt?: string,
+    options: { allowActiveRun?: boolean; origin?: "lark" } = {},
+  ) {
     if (!task || task.length > 16000) {
       ctx.ui.notify("用法：/gkd <任务>（最多 16000 字符）", "warning");
       return;
     }
-    if (!ctx.isIdle() || router.isActive() || (state && !terminal(state.phase))) {
+    if ((!options.allowActiveRun && !ctx.isIdle()) || router.isActive() || (state && !terminal(state.phase))) {
       ctx.ui.notify("已有任务尚未结束；可以说“继续上次任务”或“取消当前任务”。", "warning");
       return;
     }
@@ -200,6 +220,7 @@ export function registerWorkflow(
           taskId: randomUUID(),
           sessionId: ctx.sessionManager.getSessionId(),
           task,
+          ...(options.origin ? { origin: options.origin } : {}),
           cwd,
           tools: originalTools,
           route: null,
@@ -227,10 +248,59 @@ export function registerWorkflow(
       ctx.ui.notify(`无法启动 GKD：${String(error)}`, "error");
     }
   }
-  pi.registerCommand("gkd", {
-    description: "启动 FAST / STANDARD 开发工作流",
-    handler: async (args, ctx) => start(args.trim(), ctx),
+
+  registerWorkloopCommand(pi, (request, ctx) => {
+    if (router.isActive() || (state && !terminal(state.phase))) return false;
+    pending = {
+      sessionId: ctx.sessionManager.getSessionId(),
+      cwd: realpathSync(ctx.cwd),
+      request,
+    };
+    return () => {
+      pending = undefined;
+    };
   });
+
+  // A Skill can classify natural-language requests without starting the development FSM.
+  // This guarded bridge is only usable during the explicitly requested Skill turn.
+  pi.registerTool({
+    name: START,
+    label: "启动 GKD 开发流程",
+    description:
+      "Only the /gkd-workloop Skill may call this for an explicit development request. Use kind=development for ordinary code tasks, or kind=lark-work with an already-read, bounded list of authorized Lark records. Never call for checks, table creation, explanations or previews.",
+    defaultActive: true,
+    exposure: "model-only",
+    executionMode: "sequential",
+    parameters: startSchema,
+    async execute(_id, args, signal, _update, ctx) {
+      signal?.throwIfAborted();
+      if (!Value.Check(startSchema, args) || !pending)
+        throw new Error("No pending /gkd-workloop Skill request");
+      if (
+        pending.sessionId !== ctx.sessionManager.getSessionId() ||
+        pending.cwd !== realpathSync(ctx.cwd) ||
+        ctx.isIdle()
+      )
+        throw new Error("GKD Skill request is no longer active");
+      const request = pending.request;
+      pending = undefined;
+      const isLark = args.kind === "lark-work";
+      const task = isLark
+        ? `用户请求：${request}\n\n已读取且限定范围的飞书任务：\n${args.details}`
+        : request;
+      bridgeHandoff = true;
+      start(task, ctx, undefined, { allowActiveRun: true, origin: isLark ? "lark" : undefined });
+      if (!running(ctx)) {
+        bridgeHandoff = false;
+        throw new Error("Unable to start GKD development workflow");
+      }
+      return {
+        content: [{ type: "text", text: "GKD routing started in this session." }],
+        terminate: true,
+      };
+    },
+  });
+
 
   pi.registerTool({
     name: REPORT,
@@ -479,6 +549,7 @@ export function registerWorkflow(
   });
 
   pi.on("agent_before_settle", (event, ctx) => {
+    if (bridgeHandoff) return;
     if (
       !running(ctx) ||
       fault ||
@@ -506,11 +577,19 @@ export function registerWorkflow(
     };
   });
   pi.on("agent_settled", (event, ctx) => {
+    pending = undefined;
+    if (bridgeHandoff) {
+      bridgeHandoff = false;
+      draining = false;
+      return;
+    }
     if (running(ctx) && (event.aborted || state?.phase !== "AWAITING_APPROVAL"))
       pause(ctx, event.aborted ? "Pi 原生中断，可恢复。" : "Agent 已停止，可恢复。");
     draining = false;
   });
   pi.on("session_shutdown", (_event, ctx) => {
+    pending = undefined;
+    bridgeHandoff = false;
     pause(ctx, "会话关闭，可恢复。");
     release(ctx);
   });
@@ -528,6 +607,8 @@ export function registerWorkflow(
   });
 
   function restore(ctx: ExtensionContext) {
+    pending = undefined;
+    bridgeHandoff = false;
     release(ctx);
     state = undefined;
     fault = false;
