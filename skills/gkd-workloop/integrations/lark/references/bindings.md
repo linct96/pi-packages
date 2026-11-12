@@ -6,14 +6,14 @@
 
 存储文件：`${PI_CODING_AGENT_DIR:-~/.pi/agent}/lark-workloop/workspace-bindings.json`。首次核实保存时创建；不存在时读取空结果且不生成文件。`check-lark --invalidate` 不会清除此文件。
 
-| 字段 | 用途 |
-| --- | --- |
-| `baseToken + tableId` | 真实 Base 和表 ID，共同确定问题表 |
-| `workspace` | 当前会话允许使用的绝对真实工作区目录 |
-| `project` | 工作区内相对项目路径；单项目可为 `.` |
-| `source` | `user`（用户指定/确认）或 `inferred`（代码证据推断） |
-| `evidence` | 简短的归属依据 |
-| `id` | 单条绑定的稳定标识，用于更新或移除 |
+| 字段                  | 用途                                                 |
+| --------------------- | ---------------------------------------------------- |
+| `baseToken + tableId` | 真实 Base 和表 ID，共同确定问题表                    |
+| `workspace`           | 当前会话允许使用的绝对真实工作区目录                 |
+| `project`             | 工作区内相对项目路径；单项目可为 `.`                 |
+| `source`              | `user`（用户指定/确认）或 `inferred`（代码证据推断） |
+| `evidence`            | 简短的归属依据                                       |
+| `id`                  | 单条绑定的稳定标识，用于更新或移除                   |
 
 每条记录还包含更新时间。**视图不参与长期绑定键**：它只限制本轮扫描范围。Wiki token 不是 Base token；必须解析真实 Base、表和视图，同表允许绑定多个工作区或子项目，不能用新关联覆盖其他项目。
 

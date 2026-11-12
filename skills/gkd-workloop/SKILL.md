@@ -11,13 +11,13 @@ description: 在用户明确要求执行开发任务或飞书/Lark 问题表操�
 
 根据用户的实际意图选择入口，不要求用户使用固定命令格式。
 
-| 用户请求 | 执行入口 |
-| --- | --- |
-| 修复 Bug、实现功能、修改或重构代码 | [开发流程](references/development.md) |
+| 用户请求                                                 | 执行入口                                                 |
+| -------------------------------------------------------- | -------------------------------------------------------- |
+| 修复 Bug、实现功能、修改或重构代码                       | [开发流程](references/development.md)                    |
 | 处理飞书/Lark 问题表，或提供可核实的飞书/Lark 问题表链接 | [飞书问题处理](integrations/lark/references/workflow.md) |
-| `check-lark`、检查飞书登录或授权 | [授权检查](integrations/lark/references/check.md) |
-| `create-lark-table <Wiki 父页面 URL>`、创建问题表 | [创建问题表](integrations/lark/references/create.md) |
-| 查看、修改或移除问题表与项目的关联 | [项目关联](integrations/lark/references/bindings.md) |
+| `check-lark`、检查飞书登录或授权                         | [授权检查](integrations/lark/references/check.md)        |
+| `create-lark-table <Wiki 父页面 URL>`、创建问题表        | [创建问题表](integrations/lark/references/create.md)     |
+| 查看、修改或移除问题表与项目的关联                       | [项目关联](integrations/lark/references/bindings.md)     |
 
 - **确认飞书来源**：须明确提及“飞书”或“Lark”（不区分大小写）、提供可核实的飞书/Lark 资源链接，或使用 `check-lark` / `create-lark-table` 专用命令。仅出现“文档”“云文档”“表格”“多维表格”“Wiki”或通用 `/wiki/`、`/docx/` 路径，不足以触发飞书分支；来源不明且影响执行时先询问，不加载飞书资源或检查授权。
 - **确认执行意图**：飞书来源不等于执行授权。普通飞书/Lark 云文档读写交给文档能力；仅咨询、解释或本地开发不进入飞书分支。只提供可确认的问题表链接时默认处理现有问题表；创建问题表必须有明确的创建意图。

@@ -2,12 +2,12 @@
 
 本目录随 `gkd-workloop` Skill 安装，不单独注册 Skill 或用户命令。只在请求涉及飞书时读取对应参考文件。
 
-| 任务 | 读取 |
-| --- | --- |
-| 检查登录、基础授权、缓存 | [check.md](references/check.md) |
-| 创建 Wiki 下的漏洞跟踪问题表 | [create.md](references/create.md) |
+| 任务                               | 读取                                  |
+| ---------------------------------- | ------------------------------------- |
+| 检查登录、基础授权、缓存           | [check.md](references/check.md)       |
+| 创建 Wiki 下的漏洞跟踪问题表       | [create.md](references/create.md)     |
 | 查询、保存、修改或移除本地项目绑定 | [bindings.md](references/bindings.md) |
-| 扫描并处理已有问题表 | [workflow.md](references/workflow.md) |
+| 扫描并处理已有问题表               | [workflow.md](references/workflow.md) |
 
 ## 执行前
 

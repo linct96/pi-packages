@@ -12,15 +12,15 @@ GKD Workloop 是一个独立的开发工作流 Skill。它使用当前 Agent 的
 
 ## 常见用法
 
-| 请求 | 处理方式 |
-| --- | --- |
-| 修复登录 Bug、实现功能 | 选择 FAST 或 STANDARD，完成开发与验证 |
-| 处理飞书问题表 URL | 扫描授权记录，处理一批并回写结果 |
-| `check-lark` | 检查飞书 CLI 与用户授权 |
-| `check-lark --force` | 忽略缓存，重新检查授权 |
-| `check-lark --invalidate` | 清除授权检查缓存 |
-| `create-lark-table <Wiki 父页面 URL>` | 在 Wiki 下创建漏洞跟踪问题表 |
-| 查看、更新或移除表与项目的绑定 | 管理本地关联 |
+| 请求                                  | 处理方式                              |
+| ------------------------------------- | ------------------------------------- |
+| 修复登录 Bug、实现功能                | 选择 FAST 或 STANDARD，完成开发与验证 |
+| 处理飞书问题表 URL                    | 扫描授权记录，处理一批并回写结果      |
+| `check-lark`                          | 检查飞书 CLI 与用户授权               |
+| `check-lark --force`                  | 忽略缓存，重新检查授权                |
+| `check-lark --invalidate`             | 清除授权检查缓存                      |
+| `create-lark-table <Wiki 父页面 URL>` | 在 Wiki 下创建漏洞跟踪问题表          |
+| 查看、更新或移除表与项目的绑定        | 管理本地关联                          |
 
 在 Pi 中可以使用 `/gkd-workloop <请求>`。只输入 `/gkd-workloop` 时显示用法，不自动开始任务。其他宿主可以直接提出同等自然语言请求。
 
