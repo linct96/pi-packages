@@ -128,7 +128,7 @@ export async function checkLarkCli(force = false): Promise<PreflightResult> {
       return {
         status: "missing-cli",
         message:
-          "未检测到 lark-cli，请先按官方文档安装并确保命令位于 PATH：https://github.com/larksuite/cli 。安装后重新调用 /lark-workloop check；插件不会自动安装。",
+          "未检测到 lark-cli，请先按官方文档安装并确保命令位于 PATH：https://github.com/larksuite/cli 。安装后重新调用 /gkd-workloop check-lark；插件不会自动安装。",
       };
     }
     if (isRecord(error) && error.code === 3) return needsAuth();

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync, unlinkSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   truncateHead,
   type ExtensionAPI,
@@ -7,7 +8,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { registerJudgeRoute } from "./judge-route/index.ts";
+import { registerWorkloopCommand } from "./command.ts";
+import { registerJudgeRoute, ROUTE_POLICY } from "./judge-route/index.ts";
 import {
   loadState,
   reportTextSchema,
@@ -20,9 +22,51 @@ import {
 } from "./state.ts";
 
 const INSTRUCTIONS = readFileSync(new URL("./workflow.md", import.meta.url), "utf8").trim();
+const ROUTE_GUIDE = readFileSync(
+  new URL("./judge-route/workflow.md", import.meta.url),
+  "utf8",
+).trim();
+const LARK_GUIDE = readFileSync(new URL("./integrations/lark/gkd.md", import.meta.url), "utf8")
+  .trim()
+  .replace(
+    "integrations/lark/references/workflow.md",
+    fileURLToPath(new URL("./integrations/lark/references/workflow.md", import.meta.url)),
+  );
+const WORKLOOP_GUIDE = readFileSync(
+  new URL("./gkd-workloop/SKILL.md", import.meta.url),
+  "utf8",
+).trim();
 const ENTRY = "gkd-task";
 const REPORT = "gkd_report";
 const EVIDENCE = "gkd_route_evidence";
+const START = "gkd_workloop_start";
+const WAIT = "gkd_workloop_wait";
+const REQUEST_ENTRY = "gkd-workloop-request";
+type WorkloopRequest = {
+  sessionId: string;
+  cwd: string;
+  request: string;
+  phase: "ready" | "waiting";
+  updatedAt: number;
+  continuation?: boolean;
+};
+const waitSchema = Type.Object(
+  {
+    reason: Type.Union([
+      Type.Literal("missing-parameter"),
+      Type.Literal("lark-auth"),
+      Type.Literal("clarification"),
+    ]),
+  },
+  { additionalProperties: false },
+);
+const startSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("development") }, { additionalProperties: false }),
+  Type.Object(
+    { kind: Type.Literal("lark-work"), details: reportTextSchema },
+    { additionalProperties: false },
+  ),
+]);
 const base = { taskId: Type.String(), planVersion: Type.Integer({ minimum: 0 }) };
 const reportSchema = Type.Union([
   Type.Object(
@@ -63,6 +107,31 @@ export function registerWorkflow(
   let promptController = new AbortController();
   let nudged = false;
   let draining = false;
+  let pending: WorkloopRequest | undefined;
+  function safeTools(tools: string[]) {
+    return tools.filter(
+      (name) => ![START, WAIT, REPORT, EVIDENCE, "gkd_judge_route"].includes(name),
+    );
+  }
+  function exposeWorkloop() {
+    pi.setActiveTools([...new Set([...pi.getActiveTools(), START, WAIT])]);
+  }
+  function clearPending(persist = false) {
+    if (persist && pending) pi.appendEntry(REQUEST_ENTRY, { phase: "cleared" });
+    pending = undefined;
+    if (!engaged)
+      pi.setActiveTools(pi.getActiveTools().filter((tool) => ![START, WAIT].includes(tool)));
+  }
+  function prepareRequest(request: string, ctx: ExtensionContext) {
+    pending = {
+      sessionId: ctx.sessionManager.getSessionId(),
+      cwd: realpathSync(ctx.cwd),
+      request,
+      phase: "ready",
+      updatedAt: Date.now(),
+    };
+    exposeWorkloop();
+  }
   const owns = (ctx: ExtensionContext) =>
     !!state && state.sessionId === ctx.sessionManager.getSessionId();
   const running = (ctx: ExtensionContext) => engaged && owns(ctx);
@@ -120,7 +189,10 @@ export function registerWorkflow(
   }
   function describe() {
     const page = truncateHead(
-      INSTRUCTIONS + "\n\nCurrent GKD task:\n" + JSON.stringify(state, null, 2),
+      INSTRUCTIONS +
+        (state?.origin === "lark" ? "\n\n" + LARK_GUIDE : "") +
+        "\n\nCurrent GKD task:\n" +
+        JSON.stringify(state, null, 2),
     );
     return (
       page.content +
@@ -176,30 +248,40 @@ export function registerWorkflow(
     return true;
   }
 
-  function start(task: string, ctx: ExtensionContext, inlinePrompt?: string) {
+  function start(
+    task: string,
+    ctx: ExtensionContext,
+    inlinePrompt?: string,
+    options: { allowActiveRun?: boolean; origin?: "lark" } = {},
+  ): boolean {
     if (!task || task.length > 16000) {
-      ctx.ui.notify("用法：/gkd <任务>（最多 16000 字符）", "warning");
-      return;
+      ctx.ui.notify("用法：/gkd-workloop <任务>（最多 16000 字符）", "warning");
+      return false;
     }
-    if (!ctx.isIdle() || router.isActive() || (state && !terminal(state.phase))) {
+    if (
+      (!options.allowActiveRun && !ctx.isIdle()) ||
+      router.isActive() ||
+      (state && !terminal(state.phase))
+    ) {
       ctx.ui.notify("已有任务尚未结束；可以说“继续上次任务”或“取消当前任务”。", "warning");
-      return;
+      return false;
     }
     if (!ctx.model || !ctx.isProjectTrusted()) {
       ctx.ui.notify("GKD 需要可用模型和可信项目。", "error");
-      return;
+      return false;
     }
     try {
       const cwd = realpathSync(ctx.cwd);
       originalTools = pi
         .getActiveTools()
-        .filter((name) => ![REPORT, EVIDENCE, "gkd_judge_route"].includes(name));
+        .filter((name) => ![START, WAIT, REPORT, EVIDENCE, "gkd_judge_route"].includes(name));
       commit(
         {
           version: 2,
           taskId: randomUUID(),
           sessionId: ctx.sessionManager.getSessionId(),
           task,
+          ...(options.origin ? { origin: options.origin } : {}),
           cwd,
           tools: originalTools,
           route: null,
@@ -221,15 +303,94 @@ export function registerWorkflow(
       fault = false;
       promptController = new AbortController();
       startRouting(ctx, inlinePrompt);
+      return running(ctx);
     } catch (error) {
       if (state && !fault) pause(ctx, String(error));
       else release(ctx);
       ctx.ui.notify(`无法启动 GKD：${String(error)}`, "error");
+      return false;
     }
   }
-  pi.registerCommand("gkd", {
-    description: "启动 FAST / STANDARD 开发工作流",
-    handler: async (args, ctx) => start(args.trim(), ctx),
+
+  registerWorkloopCommand(pi, (request, ctx) => {
+    if (router.isActive() || (state && !terminal(state.phase))) return false;
+    if (pending?.phase === "waiting" || pending?.continuation) clearPending(true);
+    prepareRequest(request, ctx);
+    return () => clearPending();
+  });
+
+  pi.registerTool({
+    name: WAIT,
+    label: "等待 Workloop 参数或飞书授权",
+    description:
+      "Only for the current user-authorized /gkd-workloop request. Call before asking for missing details, clarification or Feishu authorization; preserves context across turns without starting a development task.",
+    exposure: "model-only",
+    defaultActive: false,
+    executionMode: "sequential",
+    parameters: waitSchema,
+    async execute(_id, args, signal, _update, ctx) {
+      signal?.throwIfAborted();
+      if (
+        !Value.Check(waitSchema, args) ||
+        !pending ||
+        pending.sessionId !== ctx.sessionManager.getSessionId()
+      )
+        throw new Error("No current Workloop request to wait for");
+      pending = { ...pending, phase: "waiting", updatedAt: Date.now() };
+      pi.appendEntry(REQUEST_ENTRY, pending);
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Workloop request saved. Ask the user, then resume from this request on the next turn.",
+          },
+        ],
+        details: { phase: pending.phase, reason: args.reason },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: START,
+    label: "启动 GKD 开发流程",
+    description:
+      "Only for an explicit current user development request selected by gkd-workloop. Use kind=development for code tasks, kind=lark-work only after a read-only bounded authorized Lark scan. Never for check-lark, create-lark-table, consultation or preview.",
+    defaultActive: false,
+    exposure: "model-only",
+    executionMode: "sequential",
+    parameters: startSchema,
+    async execute(_id, args, signal, _update, ctx) {
+      signal?.throwIfAborted();
+      if (!Value.Check(startSchema, args) || !pending)
+        throw new Error("No pending /gkd-workloop Skill request");
+      if (
+        pending.sessionId !== ctx.sessionManager.getSessionId() ||
+        pending.cwd !== realpathSync(ctx.cwd) ||
+        ctx.isIdle()
+      )
+        throw new Error("GKD Skill request is no longer active");
+      const request = pending.request;
+      const isLark = args.kind === "lark-work";
+      const task = isLark
+        ? `用户请求：${request}\n\n已读取且限定范围的飞书任务：\n${args.details}`
+        : request;
+      if (task.length > 16000)
+        throw new Error(
+          "GKD task exceeds 16000 characters; shorten details or ask for clarification. Request remains available.",
+        );
+      if (!start(task, ctx, task, { allowActiveRun: true, origin: isLark ? "lark" : undefined }))
+        throw new Error("Unable to start GKD development workflow; request remains available");
+      clearPending(true);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `GKD ROUTING is active. Only gkd_route_evidence and gkd_judge_route are authorized. Classify the current task using the following policy and report the exact JSON through gkd_judge_route. Do not modify code during ROUTING.\n\n${ROUTE_POLICY}\n\n${ROUTE_GUIDE}`,
+          },
+        ],
+        details: { started: true },
+      };
+    },
   });
 
   pi.registerTool({
@@ -326,8 +487,22 @@ export function registerWorkflow(
 
   pi.on("before_agent_start", (event, ctx) => {
     draining = false;
-    if (!running(ctx)) return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${describe()}` };
+    if (running(ctx)) return { systemPrompt: `${event.systemPrompt}\n\n${describe()}` };
+    if (event.messageType !== "user" || router.isActive()) return;
+    const text = event.prompt.trim();
+    const explicitlyRouted = /^\/(?:skill:)?gkd-workloop(?:\s|$)/.test(text);
+    let automatic = false;
+    try {
+      automatic = autoEnabled(ctx);
+    } catch {
+      /* no automatic dispatch on settings failure */
+    }
+    if (!pending && (explicitlyRouted || automatic))
+      prepareRequest(text.replace(/^\/(?:skill:)?gkd-workloop\s*/, "").trim(), ctx);
+    if (automatic || explicitlyRouted || pending?.continuation || pending?.phase === "waiting")
+      return {
+        systemPrompt: `${event.systemPrompt}\n\nWorkloop request routing instructions:\n${WORKLOOP_GUIDE}`,
+      };
   });
   pi.on("tool_call", (event, ctx) => {
     if (!running(ctx)) {
@@ -337,6 +512,8 @@ export function registerWorkflow(
           reason: "GKD ended or paused; wait for the current run to settle",
           terminate: true,
         };
+      if ([START, WAIT].includes(event.toolName) && !pending)
+        return { block: true, reason: "No current authorized Workloop request", terminate: true };
       if (event.toolName === REPORT)
         return { block: true, reason: "No active GKD task", terminate: true };
       return;
@@ -348,6 +525,8 @@ export function registerWorkflow(
       return [EVIDENCE, "gkd_judge_route"].includes(event.toolName)
         ? undefined
         : deny("GKD routing only permits its evidence and classification tools");
+    if ([START, WAIT].includes(event.toolName))
+      return deny("GKD already running; setup tools are not permitted in development stages");
     if (event.toolName === REPORT || event.toolName === EVIDENCE) return;
     if (
       (phase === "IMPLEMENTING" || phase === "VERIFYING") &&
@@ -365,24 +544,44 @@ export function registerWorkflow(
     if (!owns(ctx) || !state || terminal(state.phase)) {
       if (
         !text ||
-        text.startsWith("/") ||
         text.startsWith("!") ||
         event.streamingBehavior ||
         !ctx.isIdle() ||
         router.isActive()
       )
         return;
-      try {
-        if (!autoEnabled(ctx)) return;
-      } catch (error) {
-        ctx.ui.notify(
-          `无法读取 GKD 自动启用设置，未执行本次输入；请修复设置或手动使用 /gkd：${String(error)}`,
-          "error",
-        );
-        return { action: "handled" };
+      // A user answer continues only a previously saved waiting request.
+      if (pending?.phase === "waiting" && pending.sessionId === ctx.sessionManager.getSessionId()) {
+        if (/^(?:取消|放弃|取消当前任务|stop|cancel)[。.!！]?$/i.test(text)) {
+          clearPending(true);
+          ctx.ui.notify("已取消尚未启动的 Workloop 请求。", "info");
+          return { action: "handled" };
+        }
+        if (text.startsWith("/skill:gkd-workloop")) {
+          clearPending(true);
+          prepareRequest(text.replace(/^\/skill:gkd-workloop\s*/, ""), ctx);
+          return;
+        }
+        if (text.startsWith("/")) return;
+        const supplemented = `${pending.request}\n用户补充：${text}`;
+        if (supplemented.length > 16000) {
+          ctx.ui.notify("本次补充使任务超过 16000 字符，请缩短后重试。", "warning");
+          return { action: "handled" };
+        }
+        pending = {
+          ...pending,
+          request: supplemented,
+          phase: "ready",
+          continuation: true,
+          updatedAt: Date.now(),
+        };
+        exposeWorkloop();
+        return;
       }
-      start(text, ctx, event.text);
-      return { action: running(ctx) ? "continue" : "handled" };
+      if (text.startsWith("/") && !text.startsWith("/skill:gkd-workloop")) return;
+      // The main Skill routes development versus Lark operations.
+      prepareRequest(text.replace(/^\/skill:gkd-workloop\s*/, ""), ctx);
+      return;
     }
     if (/^(取消当前任务|取消上次任务|cancel (?:current )?(?:gkd )?task)[。.!！]?$/i.test(text)) {
       ctx.abort();
@@ -430,9 +629,7 @@ export function registerWorkflow(
         ctx.ui.notify("补充需求超长；请缩短后恢复。", "warning");
         return { action: "handled" };
       }
-      originalTools = pi
-        .getActiveTools()
-        .filter((name) => ![REPORT, EVIDENCE, "gkd_judge_route"].includes(name));
+      originalTools = safeTools(pi.getActiveTools());
       engaged = true;
       fault = false;
       promptController = new AbortController();
@@ -500,17 +697,22 @@ export function registerWorkflow(
           type: "custom_message",
           customType: "gkd-continue",
           display: false,
-          content: `GKD 尚未结束。执行当前阶段并通过 gkd_report 上报；不能完成请报告 blocked。\n${describe()}`,
+          content:
+            state.phase === "ROUTING"
+              ? `GKD 正在分流阶段。只可使用 gkd_route_evidence 和 gkd_judge_route 提交分类 JSON；不能使用 gkd_report。\n\n${ROUTE_POLICY}\n\n${ROUTE_GUIDE}`
+              : `GKD 尚未结束。执行当前阶段并通过 gkd_report 上报；不能完成请报告 blocked。\n${describe()}`,
         },
       ],
     };
   });
   pi.on("agent_settled", (event, ctx) => {
+    if (pending?.phase !== "waiting") clearPending(Boolean(pending?.continuation));
     if (running(ctx) && (event.aborted || state?.phase !== "AWAITING_APPROVAL"))
       pause(ctx, event.aborted ? "Pi 原生中断，可恢复。" : "Agent 已停止，可恢复。");
     draining = false;
   });
   pi.on("session_shutdown", (_event, ctx) => {
+    clearPending();
     pause(ctx, "会话关闭，可恢复。");
     release(ctx);
   });
@@ -528,7 +730,27 @@ export function registerWorkflow(
   });
 
   function restore(ctx: ExtensionContext) {
+    clearPending();
     release(ctx);
+    const savedRequest = [...ctx.sessionManager.getBranch()]
+      .reverse()
+      .find((entry) => entry.type === "custom" && entry.customType === REQUEST_ENTRY);
+    if (savedRequest?.type === "custom") {
+      const data = savedRequest.data as WorkloopRequest;
+      if (
+        data?.phase === "waiting" &&
+        data.sessionId === ctx.sessionManager.getSessionId() &&
+        data.cwd === realpathSync(ctx.cwd) &&
+        typeof data.request === "string" &&
+        data.request.length <= 16000 &&
+        typeof data.updatedAt === "number" &&
+        data.updatedAt <= Date.now() + 60000 &&
+        Date.now() - data.updatedAt < 24 * 60 * 60 * 1000
+      ) {
+        pending = data;
+        exposeWorkloop();
+      }
+    }
     state = undefined;
     fault = false;
     const entry = [...ctx.sessionManager.getBranch()]
@@ -543,7 +765,7 @@ export function registerWorkflow(
         ctx.sessionManager.getSessionId(),
         (entry.data as { taskId: string }).taskId,
       );
-      pi.setActiveTools(state.tools);
+      pi.setActiveTools(safeTools(state.tools));
       if (!terminal(state.phase)) {
         if (state.phase !== "PAUSED")
           pause(ctx, "已恢复任务；继续前由主 Agent 重新检查工作区和未完成事项。");

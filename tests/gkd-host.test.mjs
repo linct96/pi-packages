@@ -105,11 +105,12 @@ test(
             }),
           );
         const steps = [
+          () => fauxAssistantMessage(fauxToolCall("gkd_workloop_start", { kind: "development" })),
           (context) => {
             assert.match(
-              JSON.stringify(context.messages.filter((message) => message.role === "system")),
+              JSON.stringify(context.messages),
               /Task Route Policy/,
-              "routing policy reaches the real provider request",
+              "routing policy reaches the real provider request or tool-result context",
             );
             return fauxAssistantMessage(
               fauxToolCall("gkd_judge_route", {
@@ -190,7 +191,7 @@ test(
                 },
               ]
             : undefined;
-          await session.prompt(auto ? task : `/gkd ${task}`, { images });
+          await session.prompt(auto ? task : `/gkd-workloop ${task}`, { images });
           await started; // sendUserMessage starts asynchronously after the command returns.
           await session.waitForIdle();
           if (resume) {

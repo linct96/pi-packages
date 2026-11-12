@@ -38,7 +38,7 @@ export async function createTracker(
   onProgress: (stage: string) => void = () => {},
 ) {
   const invalidParentMessage =
-    "创建未开始：需要飞书/Lark 知识库（Wiki）父页面链接。\n请打开要放置新表的知识库页面，复制地址栏中含 /wiki/ 的 HTTPS 链接；不支持云盘文件夹或普通文档链接。\n用法：/lark-workloop create <Wiki 父页面链接>";
+    "创建未开始：需要飞书/Lark 知识库（Wiki）父页面链接。\n请打开要放置新表的知识库页面，复制地址栏中含 /wiki/ 的 HTTPS 链接；不支持云盘文件夹或普通文档链接。\n用法：/gkd-workloop create-lark-table <Wiki 父页面链接>";
   let parent: URL;
   try {
     parent = new URL(parentUrl);

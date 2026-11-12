@@ -1584,7 +1584,7 @@ test(
     assert.equal(stateOf(h.runtime.session.sessionManager).attempt, 3);
     assert.equal(stateOf(h.runtime.session.sessionManager).phase, "FAILED");
     await h.runtime.session.prompt("do not overwrite");
-    await h.runtime.session.prompt("/gkd change value.txt");
+    await h.runtime.session.prompt("/gkd-workloop change value.txt");
     await tick();
     await h.runtime.session.waitForIdle();
     assert.equal(h.faux.state.callCount, 3);
@@ -1599,6 +1599,25 @@ test(
       "reload/resume must not reset the exhausted retry budget",
     );
     assert.equal(stateOf(h.runtime.session.sessionManager).attempt, 3);
+    assert.deepEqual(h.errors, []);
+  },
+);
+test(
+  "first /gkd-workloop command is held by Model Probe and replayed once after success",
+  { timeout: 20000 },
+  async (t) => {
+    const h = await sdk(t, {
+      gkd: true,
+      persisted: true,
+      responses: [fauxAssistantMessage("ABC"), fauxAssistantMessage("check reported")],
+    });
+    await h.runtime.session.prompt("/gkd-workloop check-lark");
+    await h.runtime.session.waitForIdle();
+    const state = stateOf(h.runtime.session.sessionManager);
+    assert.equal(state.phase, "READY", JSON.stringify(h.errors));
+    assert.equal(state.pendingMessage.text, "/gkd-workloop check-lark");
+    assert.equal(state.pendingMessage.delivery, "delivered");
+    assert.equal(h.faux.state.callCount, 2, "one probe turn and one resumed request");
     assert.deepEqual(h.errors, []);
   },
 );

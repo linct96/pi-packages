@@ -10,6 +10,20 @@ import { FAILURE_OPTIONS, selectFailureAction } from "./failure-dialog.ts";
 
 export const PROBE_ENTRY = "codex-settings:model-probe";
 export const HANDOFF_ENTRY = "codex-settings:model-probe-handoff";
+
+// Commands are intercepted before they add conversation entries. A registered
+// gate belongs to the active Pi session; absent Model Probe is not a blocker.
+type WorkloopGate = (request: string, ctx: ExtensionContext) => boolean;
+const globalProbeRegistry = globalThis as typeof globalThis & {
+  __linct96WorkloopProbeGates?: Map<string, WorkloopGate>;
+};
+const workloopGates = (globalProbeRegistry.__linct96WorkloopProbeGates ??= new Map<
+  string,
+  WorkloopGate
+>());
+export function deferWorkloopForProbe(request: string, ctx: ExtensionContext): boolean {
+  return workloopGates.get(ctx.sessionManager.getSessionId())?.(request, ctx) ?? false;
+}
 const QUESTION = "codex-settings:model-probe";
 const RESTART = "codex-probe-restart";
 type Phase = "PENDING" | "TESTING" | "PASSED" | "FAILED" | "RESTARTING" | "DELIVERING" | "READY";
@@ -293,6 +307,46 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     }
   }
 
+  function gateWorkloopCommand(request: string, ctx: ExtensionContext): boolean {
+    if (!enabled || !applies(ctx)) return false;
+    if (loading || fault) {
+      notify(ctx, "Model Probe 尚未就绪，Workloop 请求未执行。", true);
+      return true;
+    }
+    if (state && ["PASSED", "READY"].includes(state.phase)) return false;
+    // A message delivered by Model Probe is already authorized to continue.
+    if (state?.phase === "DELIVERING" && state.pendingMessage?.text === request) return false;
+    if (!state && pendingConfig && !hasConversation(ctx)) {
+      state = {
+        version: 1,
+        sessionId: liveSession,
+        runId: randomUUID(),
+        phase: "PENDING",
+        config: { ...pendingConfig, enabled },
+        model: modelKey(ctx),
+        index: 0,
+        results: [],
+      };
+      pendingConfig = undefined;
+    }
+    if (!state) return false; // Existing conversations are not retroactively probed.
+    if (!state.pendingMessage) {
+      persist(ctx, {
+        pendingMessage: {
+          id: randomUUID(),
+          text: request,
+          images: [],
+          delivery: "pending",
+        },
+      });
+      notify(ctx, "Workloop 请求已暂存，模型检测通过前不会执行。");
+    } else {
+      notify(ctx, "已有待处理请求，Workloop 暂不接受重复投递。");
+    }
+    if (state.phase === "PENDING") askQuestion(ctx);
+    return true;
+  }
+
   async function restore(ctx: ExtensionContext, tree = false) {
     const version = ++generation;
     stop();
@@ -483,9 +537,17 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     }
   }
 
-  pi.on("session_start", (_event, ctx) => restore(ctx));
-  pi.on("session_tree", (_event, ctx) => restore(ctx, true));
+  pi.on("session_start", (_event, ctx) => {
+    workloopGates.set(ctx.sessionManager.getSessionId(), gateWorkloopCommand);
+    return restore(ctx);
+  });
+  pi.on("session_tree", (_event, ctx) => {
+    workloopGates.set(ctx.sessionManager.getSessionId(), gateWorkloopCommand);
+    return restore(ctx, true);
+  });
   pi.on("session_shutdown", (_event, ctx) => {
+    if (workloopGates.get(ctx.sessionManager.getSessionId()) === gateWorkloopCommand)
+      workloopGates.delete(ctx.sessionManager.getSessionId());
     generation++;
     stop();
     loading = true;
@@ -520,7 +582,8 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       !event.streamingBehavior &&
       ctx.isIdle() &&
       (event.text.trim() || event.images?.length) &&
-      !event.text.trimStart().startsWith("/") &&
+      (!event.text.trimStart().startsWith("/") ||
+        event.text.trimStart().startsWith("/skill:gkd-workloop ")) &&
       !hasConversation(ctx)
     ) {
       state = {

@@ -101,6 +101,7 @@ function harness(cwd, options = {}) {
     signal: abortController.signal,
     model: { id: "test", provider: "test" },
     isIdle: () => !busy,
+    hasPendingMessages: () => false,
     isProjectTrusted: () => true,
     abort: () => abortController.abort(),
     sessionManager: {
@@ -161,7 +162,9 @@ function harness(cwd, options = {}) {
       confirm = value;
     },
     async start(standard = false) {
-      await commands.get("gkd").handler("Change the stored value to after", ctx);
+      await commands.get("gkd-workloop").handler("Change the stored value to after", ctx);
+      assert.equal(messages.at(-1), "/skill:gkd-workloop Change the stored value to after");
+      await invoke("gkd_workloop_start", { kind: "development" });
       assert.equal(state().phase, "ROUTING");
       await invoke("gkd_judge_route", { response: JSON.stringify(rawRoute(standard)) });
     },
@@ -178,12 +181,16 @@ function harness(cwd, options = {}) {
 
 test("loading is inert and only the three existing commands are registered", async () => {
   const app = harness(await project());
-  assert.deepEqual([...app.commands.keys()].sort(), ["gkd", "gkd-judge-route", "gkd-settings"]);
+  assert.deepEqual([...app.commands.keys()].sort(), [
+    "gkd-judge-route",
+    "gkd-settings",
+    "gkd-workloop",
+  ]);
   assert.deepEqual([...app.shortcuts.keys()], ["super+shift+g"]);
   assert.deepEqual(app.activeTools(), originalTools);
   assert.equal(await app.event("tool_call", { toolName: "write", input: {} }), undefined);
   assert.equal(await app.event("before_agent_start", { systemPrompt: "ordinary" }), undefined);
-  await app.commands.get("gkd").handler("", app.ctx);
+  await app.commands.get("gkd-workloop").handler("", app.ctx);
   assert.equal(app.state(), undefined);
 });
 
@@ -359,7 +366,7 @@ test("only user cancellation ends the task, without undoing code or starting par
     app = harness(cwd);
   await app.start();
   const taskId = app.state().taskId;
-  await app.commands.get("gkd").handler("Another task", app.ctx);
+  await app.commands.get("gkd-workloop").handler("Another task", app.ctx);
   assert.equal(app.state().taskId, taskId);
   await writeFile(join(cwd, "value.txt"), "unfinished work");
   await app.input("取消当前任务", "extension");
@@ -374,7 +381,8 @@ test("only user cancellation ends the task, without undoing code or starting par
 test("NONE/DIRECT exit development control and routing failures block instead of completing", async () => {
   for (const operation of [false, true]) {
     const app = harness(await project());
-    await app.commands.get("gkd").handler("ordinary request", app.ctx);
+    await app.commands.get("gkd-workloop").handler("ordinary request", app.ctx);
+    await app.invoke("gkd_workloop_start", { kind: "development" });
     const raw = rawRoute();
     raw.intent = operation ? "operation" : "non_development";
     raw.route = operation ? "DIRECT" : "NONE";
@@ -385,7 +393,8 @@ test("NONE/DIRECT exit development control and routing failures block instead of
     assert.deepEqual(app.activeTools(), originalTools);
   }
   const app = harness(await project());
-  await app.commands.get("gkd").handler("task", app.ctx);
+  await app.commands.get("gkd-workloop").handler("task", app.ctx);
+  await app.invoke("gkd_workloop_start", { kind: "development" });
   await app.invoke("gkd_judge_route", { response: "invalid" });
   assert.equal(app.state().phase, "BLOCKED");
   await app.event("agent_settled");
@@ -393,7 +402,23 @@ test("NONE/DIRECT exit development control and routing failures block instead of
   assert.equal(app.state().phase, "ROUTING");
 });
 
-test("global auto mode routes the original input without injecting a duplicate message", async (t) => {
+test("waiting request persists across session reload but cancellation clears authorization", async () => {
+  const cwd = await project();
+  const app = harness(cwd);
+  await app.commands.get("gkd-workloop").handler("处理飞书问题表", app.ctx);
+  await app.invoke("gkd_workloop_wait", { reason: "lark-auth" });
+  await app.event("agent_settled", { aborted: false });
+  const reloaded = harness(cwd, { entries: app.entries });
+  await reloaded.event("session_start");
+  assert.ok(reloaded.activeTools().includes("gkd_workloop_wait"));
+  assert.equal((await reloaded.input("取消")).action, "handled");
+  assert.ok(!reloaded.activeTools().includes("gkd_workloop_start"));
+  const again = harness(cwd, { entries: reloaded.entries });
+  await again.event("session_start");
+  assert.ok(!again.activeTools().includes("gkd_workloop_start"));
+});
+
+test("global auto mode loads semantic Skill routing without duplicating input", async (t) => {
   const path = join(process.env.PI_CODING_AGENT_DIR, "gkd-workflow.json");
   t.after(() => rm(path, { force: true }));
   const app = harness(await project());
@@ -402,26 +427,20 @@ test("global auto mode routes the original input without injecting a duplicate m
   for (const standard of [false, true]) {
     const current = harness(await project());
     const prompt = "  Change the stored value to after  ";
-    assert.equal((await current.input(prompt)).action, "continue");
-    assert.equal(current.state().task, prompt.trim());
-    assert.equal(current.messages.length, 0, "the current native input is reused");
+    assert.equal(await current.input(prompt), undefined);
+    assert.equal(current.state(), undefined, "intent routing precedes development");
+    assert.equal(current.messages.length, 0, "no duplicate user message");
     const instructions = await current.event("before_agent_start", {
       messageType: "user",
       prompt,
       systemPrompt: "base",
     });
-    assert.match(instructions.systemPrompt, /Task Route Policy/);
-    const normalized = await current.event("before_agent_start", {
-      messageType: "user",
-      prompt: `${prompt}\n[Image resized by Pi]`,
-      systemPrompt: "base",
-    });
-    assert.match(
-      normalized.systemPrompt,
-      /Task Route Policy/,
-      "native image preprocessing cannot drop routing instructions",
-    );
-    assert.deepEqual(current.activeTools(), ["gkd_route_evidence", "gkd_judge_route"]);
+    assert.match(instructions.systemPrompt, /GKD Workloop/);
+    assert.ok(current.activeTools().includes("gkd_workloop_start"));
+    await current.invoke("gkd_workloop_start", { kind: "development" });
+    assert.equal(current.state().phase, "ROUTING");
+    assert.ok(!current.state().tools.includes("gkd_workloop_start"));
+    assert.ok(!current.state().tools.includes("gkd_workloop_wait"));
     await current.invoke("gkd_judge_route", { response: JSON.stringify(rawRoute(standard)) });
     if (standard) {
       await current.report("plan", { plan });
@@ -432,18 +451,42 @@ test("global auto mode routes the original input without injecting a duplicate m
     await current.report("implemented", { summary });
     await current.report("verified", validation);
     await current.event("agent_settled", { aborted: false });
-    assert.equal((await current.input("A new task")).action, "continue");
+    assert.equal(await current.input("A new task"), undefined);
+    await current.invoke("gkd_workloop_start", { kind: "development" });
     assert.equal(current.state().phase, "ROUTING");
   }
   await app.shortcuts.get("super+shift+g").handler(app.ctx);
   const off = harness(await project());
-  assert.equal(
-    await off.input("ordinary input", "rpc"),
-    undefined,
-    "other sessions use the global off value",
-  );
+  assert.equal(await off.input("ordinary input", "rpc"), undefined);
   await off.start();
-  assert.equal(off.state().phase, "IMPLEMENTING", "manual /gkd still works when off");
+  assert.equal(off.state().phase, "IMPLEMENTING");
+});
+
+test("natural language, missing parameters and overflow retain safe handoff state", async () => {
+  const app = harness(await project());
+  assert.ok(!app.activeTools().includes("gkd_workloop_start"));
+  await app.input("修复登录 BUG");
+  assert.ok(app.activeTools().includes("gkd_workloop_start"));
+  await app.invoke("gkd_workloop_wait", { reason: "missing-parameter" });
+  await app.event("agent_settled", { aborted: false });
+  await app.input("按钮提交后没有反应");
+  const continuation = await app.event("before_agent_start", {
+    messageType: "user",
+    prompt: "按钮提交后没有反应",
+    systemPrompt: "base",
+  });
+  assert.match(continuation.systemPrompt, /GKD Workloop/);
+  await assert.rejects(
+    app.invoke("gkd_workloop_start", { kind: "lark-work", details: "X".repeat(16000) }),
+    /exceeds 16000/,
+  );
+  assert.equal(app.state(), undefined, "oversize must not create a GKD task");
+  await app.invoke("gkd_workloop_start", { kind: "development" });
+  assert.match(app.state().task, /用户补充：按钮提交后没有反应/);
+  assert.ok(!app.state().tools.includes("gkd_workloop_start"));
+  assert.ok(!app.state().tools.includes("gkd_workloop_wait"));
+  await app.invoke("gkd_judge_route", { response: JSON.stringify(rawRoute()) });
+  assert.ok(!app.activeTools().includes("gkd_workloop_start"));
 });
 
 test("auto mode leaves extension messages, slash commands, streaming and existing tasks alone", async (t) => {
@@ -463,6 +506,7 @@ test("auto mode leaves extension messages, slash commands, streaming and existin
   app.setBusy(false);
   assert.equal(app.state(), undefined);
   await app.input("Start task", "rpc");
+  await app.invoke("gkd_workloop_start", { kind: "development" });
   await app.invoke("gkd_judge_route", { response: JSON.stringify(rawRoute(true)) });
   await app.report("plan", { plan });
   const taskId = app.state().taskId;
@@ -472,11 +516,7 @@ test("auto mode leaves extension messages, slash commands, streaming and existin
   assert.equal(app.state().phase, "PAUSED");
   await app.shortcuts.get("super+shift+g").handler(app.ctx);
   await app.input("Another ordinary message");
-  assert.equal(
-    app.state().phase,
-    "PAUSED",
-    "turning on does not resume or replace the current task",
-  );
+  assert.equal(app.state().phase, "PAUSED", "auto does not resume or replace a paused task");
   assert.equal(app.state().taskId, taskId);
   await app.input("继续上次任务");
   assert.equal(app.state().phase, "PLANNING");
@@ -484,43 +524,41 @@ test("auto mode leaves extension messages, slash commands, streaming and existin
   assert.equal(app.state().phase, "CANCELLED");
 });
 
-test("auto NONE/DIRECT exit development control without running a second classification", async (t) => {
+test("auto NONE and DIRECT requests remain outside the development FSM unless explicitly handed off", async (t) => {
   const path = join(process.env.PI_CODING_AGENT_DIR, "gkd-workflow.json");
   t.after(() => rm(path, { force: true }));
   saveSettings(path, true, false);
-  for (const operation of [false, true]) {
+  for (const text of ["Run existing tests", "Explain useEffect"]) {
     const app = harness(await project());
-    await app.input(operation ? "Run existing tests" : "Explain useEffect");
-    const raw = rawRoute();
-    raw.intent = operation ? "operation" : "non_development";
-    raw.route = operation ? "DIRECT" : "NONE";
-    if (operation)
-      raw.assessment = Object.fromEntries(Object.keys(raw.assessment).map((key) => [key, false]));
-    const result = await app.invoke("gkd_judge_route", { response: JSON.stringify(raw) });
+    assert.equal(await app.input(text), undefined);
+    const instructions = await app.event("before_agent_start", {
+      messageType: "user",
+      prompt: text,
+      systemPrompt: "base",
+    });
+    assert.match(instructions.systemPrompt, /GKD Workloop/);
     assert.equal(app.state(), undefined);
-    assert.equal(result.terminate, false, "ordinary response continues in the same turn");
-    assert.deepEqual(app.activeTools(), originalTools);
     assert.equal(app.messages.length, 0);
+    await app.event("agent_settled");
+    assert.deepEqual(app.activeTools(), originalTools);
   }
 });
 
-test("auto startup failures consume input instead of silently bypassing GKD", async (t) => {
+test("auto-mode development rejects untrusted projects, absent models and oversize tasks", async (t) => {
   const path = join(process.env.PI_CODING_AGENT_DIR, "gkd-workflow.json");
   t.after(() => rm(path, { force: true }));
   saveSettings(path, true, false);
-  for (const kind of ["untrusted", "model", "length", "settings"]) {
+  for (const kind of ["untrusted", "model", "length"]) {
     const app = harness(await project());
     if (kind === "untrusted") app.ctx.isProjectTrusted = () => false;
     if (kind === "model") app.ctx.model = undefined;
-    if (kind === "settings") await writeFile(path, "{");
-    assert.equal(
-      (await app.input(kind === "length" ? "x".repeat(16001) : "Task")).action,
-      "handled",
-      kind,
+    await app.input(kind === "length" ? "x".repeat(16001) : "Task");
+    await assert.rejects(
+      app.invoke("gkd_workloop_start", { kind: "development" }),
+      kind === "length" ? /exceeds 16000/ : /Unable to start GKD development workflow/,
     );
     assert.equal(app.state(), undefined);
-    assert.ok(app.notices.length > 0);
-    assert.deepEqual(app.activeTools(), originalTools);
+    if (kind !== "length") assert.ok(app.notices.length > 0);
   }
 });
 

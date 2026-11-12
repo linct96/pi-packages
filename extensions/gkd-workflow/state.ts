@@ -36,6 +36,7 @@ const stateSchema = Type.Object(
     taskId: Type.String({ pattern: "^[a-f0-9-]{36}$" }),
     sessionId: Type.String({ minLength: 1 }),
     task: reportTextSchema,
+    origin: Type.Optional(Type.Literal("lark")),
     cwd: Type.String(),
     tools: Type.Array(Type.String(), { maxItems: 256 }),
     route: Type.Union([enumOf(["FAST", "STANDARD"]), Type.Null()]),
