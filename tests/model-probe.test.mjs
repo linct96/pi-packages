@@ -1621,4 +1621,3 @@ test(
     assert.deepEqual(h.errors, []);
   },
 );
-

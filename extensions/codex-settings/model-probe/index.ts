@@ -17,8 +17,10 @@ type WorkloopGate = (request: string, ctx: ExtensionContext) => boolean;
 const globalProbeRegistry = globalThis as typeof globalThis & {
   __linct96WorkloopProbeGates?: Map<string, WorkloopGate>;
 };
-const workloopGates =
-  (globalProbeRegistry.__linct96WorkloopProbeGates ??= new Map<string, WorkloopGate>());
+const workloopGates = (globalProbeRegistry.__linct96WorkloopProbeGates ??= new Map<
+  string,
+  WorkloopGate
+>());
 export function deferWorkloopForProbe(request: string, ctx: ExtensionContext): boolean {
   return workloopGates.get(ctx.sessionManager.getSessionId())?.(request, ctx) ?? false;
 }

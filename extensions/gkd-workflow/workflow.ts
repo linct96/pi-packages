@@ -26,10 +26,7 @@ const ROUTE_GUIDE = readFileSync(
   new URL("./judge-route/workflow.md", import.meta.url),
   "utf8",
 ).trim();
-const LARK_GUIDE = readFileSync(
-  new URL("./integrations/lark/gkd.md", import.meta.url),
-  "utf8",
-)
+const LARK_GUIDE = readFileSync(new URL("./integrations/lark/gkd.md", import.meta.url), "utf8")
   .trim()
   .replace(
     "integrations/lark/references/workflow.md",
@@ -54,11 +51,13 @@ type WorkloopRequest = {
   continuation?: boolean;
 };
 const waitSchema = Type.Object(
-  { reason: Type.Union([
-    Type.Literal("missing-parameter"),
-    Type.Literal("lark-auth"),
-    Type.Literal("clarification"),
-  ]) },
+  {
+    reason: Type.Union([
+      Type.Literal("missing-parameter"),
+      Type.Literal("lark-auth"),
+      Type.Literal("clarification"),
+    ]),
+  },
   { additionalProperties: false },
 );
 const startSchema = Type.Union([
@@ -110,7 +109,9 @@ export function registerWorkflow(
   let draining = false;
   let pending: WorkloopRequest | undefined;
   function safeTools(tools: string[]) {
-    return tools.filter((name) => ![START, WAIT, REPORT, EVIDENCE, "gkd_judge_route"].includes(name));
+    return tools.filter(
+      (name) => ![START, WAIT, REPORT, EVIDENCE, "gkd_judge_route"].includes(name),
+    );
   }
   function exposeWorkloop() {
     pi.setActiveTools([...new Set([...pi.getActiveTools(), START, WAIT])]);
@@ -320,19 +321,29 @@ export function registerWorkflow(
   pi.registerTool({
     name: WAIT,
     label: "等待 Workloop 参数或飞书授权",
-    description: "Only for the current user-authorized /gkd-workloop request. Call before asking for missing details, clarification or Feishu authorization; preserves context across turns without starting a development task.",
+    description:
+      "Only for the current user-authorized /gkd-workloop request. Call before asking for missing details, clarification or Feishu authorization; preserves context across turns without starting a development task.",
     exposure: "model-only",
     defaultActive: false,
     executionMode: "sequential",
     parameters: waitSchema,
     async execute(_id, args, signal, _update, ctx) {
       signal?.throwIfAborted();
-      if (!Value.Check(waitSchema, args) || !pending || pending.sessionId !== ctx.sessionManager.getSessionId())
+      if (
+        !Value.Check(waitSchema, args) ||
+        !pending ||
+        pending.sessionId !== ctx.sessionManager.getSessionId()
+      )
         throw new Error("No current Workloop request to wait for");
       pending = { ...pending, phase: "waiting", updatedAt: Date.now() };
       pi.appendEntry(REQUEST_ENTRY, pending);
       return {
-        content: [{ type: "text", text: "Workloop request saved. Ask the user, then resume from this request on the next turn." }],
+        content: [
+          {
+            type: "text",
+            text: "Workloop request saved. Ask the user, then resume from this request on the next turn.",
+          },
+        ],
         details: { phase: pending.phase, reason: args.reason },
       };
     },
@@ -341,7 +352,8 @@ export function registerWorkflow(
   pi.registerTool({
     name: START,
     label: "启动 GKD 开发流程",
-    description: "Only for an explicit current user development request selected by gkd-workloop. Use kind=development for code tasks, kind=lark-work only after a read-only bounded authorized Lark scan. Never for check-lark, create-lark-table, consultation or preview.",
+    description:
+      "Only for an explicit current user development request selected by gkd-workloop. Use kind=development for code tasks, kind=lark-work only after a read-only bounded authorized Lark scan. Never for check-lark, create-lark-table, consultation or preview.",
     defaultActive: false,
     exposure: "model-only",
     executionMode: "sequential",
@@ -362,7 +374,9 @@ export function registerWorkflow(
         ? `用户请求：${request}\n\n已读取且限定范围的飞书任务：\n${args.details}`
         : request;
       if (task.length > 16000)
-        throw new Error("GKD task exceeds 16000 characters; shorten details or ask for clarification. Request remains available.");
+        throw new Error(
+          "GKD task exceeds 16000 characters; shorten details or ask for clarification. Request remains available.",
+        );
       if (!start(task, ctx, task, { allowActiveRun: true, origin: isLark ? "lark" : undefined }))
         throw new Error("Unable to start GKD development workflow; request remains available");
       clearPending(true);
@@ -477,11 +491,17 @@ export function registerWorkflow(
     const text = event.prompt.trim();
     const explicitlyRouted = /^\/(?:skill:)?gkd-workloop(?:\s|$)/.test(text);
     let automatic = false;
-    try { automatic = autoEnabled(ctx); } catch { /* no automatic dispatch on settings failure */ }
+    try {
+      automatic = autoEnabled(ctx);
+    } catch {
+      /* no automatic dispatch on settings failure */
+    }
     if (!pending && (explicitlyRouted || automatic))
       prepareRequest(text.replace(/^\/(?:skill:)?gkd-workloop\s*/, "").trim(), ctx);
     if (automatic || explicitlyRouted || pending?.continuation || pending?.phase === "waiting")
-      return { systemPrompt: `${event.systemPrompt}\n\nWorkloop request routing instructions:\n${WORKLOOP_GUIDE}` };
+      return {
+        systemPrompt: `${event.systemPrompt}\n\nWorkloop request routing instructions:\n${WORKLOOP_GUIDE}`,
+      };
   });
   pi.on("tool_call", (event, ctx) => {
     if (!running(ctx)) {
@@ -522,9 +542,13 @@ export function registerWorkflow(
     const text = event.text.trim();
     if (!owns(ctx) || !state || terminal(state.phase)) {
       if (
-        !text || text.startsWith("!") || event.streamingBehavior ||
-        !ctx.isIdle() || router.isActive()
-      ) return;
+        !text ||
+        text.startsWith("!") ||
+        event.streamingBehavior ||
+        !ctx.isIdle() ||
+        router.isActive()
+      )
+        return;
       // A user answer continues only a previously saved waiting request.
       if (pending?.phase === "waiting" && pending.sessionId === ctx.sessionManager.getSessionId()) {
         if (text.startsWith("/") && !text.startsWith("/skill:gkd-workloop")) return;
@@ -533,7 +557,13 @@ export function registerWorkflow(
           ctx.ui.notify("本次补充使任务超过 16000 字符，请缩短后重试。", "warning");
           return { action: "handled" };
         }
-        pending = { ...pending, request: supplemented, phase: "ready", continuation: true, updatedAt: Date.now() };
+        pending = {
+          ...pending,
+          request: supplemented,
+          phase: "ready",
+          continuation: true,
+          updatedAt: Date.now(),
+        };
         exposeWorkloop();
         return;
       }

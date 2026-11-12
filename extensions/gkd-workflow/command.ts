@@ -11,7 +11,10 @@ export function registerWorkloopCommand(
     handler: async (args, ctx) => {
       const input = args.trim();
       if (!input) {
-        ctx.ui.notify("用法：/gkd-workloop <任务或飞书表URL> | check-lark | create-lark-table <Wiki父页面URL>", "info");
+        ctx.ui.notify(
+          "用法：/gkd-workloop <任务或飞书表URL> | check-lark | create-lark-table <Wiki父页面URL>",
+          "info",
+        );
         return;
       }
       if (!ctx.isIdle() || ctx.hasPendingMessages()) {

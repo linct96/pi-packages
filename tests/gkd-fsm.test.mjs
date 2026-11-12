@@ -481,7 +481,10 @@ test("auto mode leaves extension messages, slash commands, streaming and existin
   for (const text of ["", "/skill:review", "/template", "!echo hello"])
     assert.equal(await app.input(text), undefined);
   assert.equal(await app.input("injected", "extension"), undefined);
-  assert.equal(await app.input("queued", "interactive", { streamingBehavior: "followUp" }), undefined);
+  assert.equal(
+    await app.input("queued", "interactive", { streamingBehavior: "followUp" }),
+    undefined,
+  );
   app.setBusy(true);
   assert.equal(await app.input("steering"), undefined);
   app.setBusy(false);
@@ -513,7 +516,9 @@ test("auto NONE and DIRECT requests remain outside the development FSM unless ex
     const app = harness(await project());
     assert.equal(await app.input(text), undefined);
     const instructions = await app.event("before_agent_start", {
-      messageType: "user", prompt: text, systemPrompt: "base",
+      messageType: "user",
+      prompt: text,
+      systemPrompt: "base",
     });
     assert.match(instructions.systemPrompt, /GKD Workloop/);
     assert.equal(app.state(), undefined);
@@ -534,10 +539,10 @@ test("auto-mode development rejects untrusted projects, absent models and oversi
     await app.input(kind === "length" ? "x".repeat(16001) : "Task");
     await assert.rejects(
       app.invoke("gkd_workloop_start", { kind: "development" }),
-      /Unable to start GKD development workflow/,
+      kind === "length" ? /exceeds 16000/ : /Unable to start GKD development workflow/,
     );
     assert.equal(app.state(), undefined);
-    assert.ok(app.notices.length > 0);
+    if (kind !== "length") assert.ok(app.notices.length > 0);
   }
 });
 

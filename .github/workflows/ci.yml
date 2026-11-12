@@ -35,13 +35,6 @@ jobs:
         id: deps
         run: pnpm install --frozen-lockfile
 
-      - name: Format diff preview (temporary)
-        run: |
-          pnpm format
-          echo '=== FORMAT PATCH BEGIN ==='
-          git diff --no-ext-diff --unified=3 -- extensions/codex-settings/model-probe/index.ts extensions/gkd-workflow/command.ts extensions/gkd-workflow/workflow.ts tests/gkd-fsm.test.mjs tests/gkd-host.test.mjs tests/model-probe.test.mjs
-          echo '=== FORMAT PATCH END ==='
-
       - name: Check formatting
         run: pnpm format:check
 
