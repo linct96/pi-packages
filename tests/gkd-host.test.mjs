@@ -106,7 +106,10 @@ test(
           );
         const steps = [
           ...(!auto
-            ? [() => fauxAssistantMessage(fauxToolCall("gkd_workloop_start", { kind: "development" }))]
+            ? [
+                () =>
+                  fauxAssistantMessage(fauxToolCall("gkd_workloop_start", { kind: "development" })),
+              ]
             : []),
           (context) => {
             assert.match(
