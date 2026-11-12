@@ -27,12 +27,10 @@
       "./extensions/codex-settings/index.ts",
       "./extensions/bar-cursor.ts",
       "./extensions/footer-status/index.ts",
-      "./extensions/gkd-workflow/index.ts",
-      "./extensions/lark-workloop/index.ts"
+      "./extensions/gkd-workflow/index.ts"
     ],
     "skills": [
-      "./extensions/gkd-workflow/gkd-pr",
-      "./extensions/lark-workloop"
+      "./extensions/gkd-workflow/gkd-workloop"
     ]
   },
   "peerDependencies": {

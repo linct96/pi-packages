@@ -1,16 +1,21 @@
 # work：在指定工作区处理问题
 
-当用户调用 `/lark-workloop work --larkurl <问题表URL> [--workspace <工作区路径>]`、`/skill:lark-workloop work ...`，或总入口将本次明确的处理请求分发为 work 时，按本协议实际执行。解释、设计、评审和预览不构成处理授权。执行者是当前主 Agent，不启动嵌套 Agent、其他模型、新会话或后台执行器。
+用户通过 `/gkd-workloop <飞书问题表URL>` 或自然语言提出处理请求，由主 Skill 完成飞书任务接入，并以唯一 GKD 状态机执行开发。本协议适用于被明确授权的一轮问题处理；解释、设计、评审和预览不构成处理授权。
+
+## 与 GKD 状态机的衔接
+
+本参考兼具接入扫描与阶段同步说明；**不再作为独立代码开发 loop 执行**。主 Skill 在调用 `gkd_workloop_start` 前仅执行启动检查、项目归属、完整扫描、复杂度预算与清单冻结（即下文第 1–2 步）。前置阶段不得修改飞书的类型/状态/分组、不得修改业务代码。已核实的任务清单交给 GKD 唯一状态机，并将表/视图、真实 record_id、问题描述、授权与目录证据写入任务详情。
+
+只有 GKD 进入 IMPLEMENTING 后才能按第 3–4 步为本轮选中任务修改阶段并实现代码；该阶段结束调用 `gkd_report(action="implemented")`。进入 VERIFYING 后按第 4 步统一验证、第 5 步安全回写以及第 6 步总结，再调用 `gkd_report(action="verified")`。验证与飞书回写必须是实际结果，未完全完成时报告失败或阻塞，不能误报 COMPLETED。STANDARD 的方案审批是硬性前置门禁；没有审批不能推进飞书状态或修复代码。GKD 不直接管理飞书字段结构，使用本分包的规则完成映射。
 
 ## 参数与执行范围
 
 ```text
-/lark-workloop work --larkurl <问题表URL> [--workspace <工作区路径>]
-/lark-workloop work --larkurl https://example.feishu.cn/wiki/Abc123
-/lark-workloop work --larkurl https://example.feishu.cn/wiki/Abc123 --workspace "/Users/me/my project"
+/gkd-workloop https://example.feishu.cn/wiki/Abc123
+/gkd-workloop 处理问题表 https://example.feishu.cn/wiki/Abc123，项目在 "/Users/me/my project"
 ```
 
-- 参数校验由主 Agent 完成：必填命名参数 `--larkurl <问题表URL>` 和可选 `--workspace <工作区路径>`，参数值可用单引号或双引号包裹。不接受旧的位置参数 URL；未知参数、重复参数、位置参数或未闭合引号先报告用法并停止；缺少 `--larkurl` 或显式参数缺值时先询问，不检查授权、不访问飞书、不修改代码或远端记录。
+- 参数校验由主 Agent 按自然语言意图完成：必须获得一条明确的问题表 URL，工作区默认当前会话目录，也允许用户明确指定。缺少目标链接、路径不明确或请求自相矛盾时先询问；信息齐备后直接处理，不要求用户改写为特定参数格式。
 - URL 必须是无用户名密码的 HTTPS 链接，目标为现有漏洞跟踪多维表或其 Wiki 链接。普通云文档正文、表单提交页或其他类型不在首版范围；不能从正文自行抽取问题继续修复。Wiki 指向旧电子表格时，可按对应能力只读定位其中唯一的问题多维表；有多个目标时先让用户选择，不扫描整个知识库。
 - 未指定 `--workspace` 时默认当前 Agent 会话 cwd（快捷入口提供的当前会话 cwd 优先），不是插件安装目录。表链接只采用本次请求或当前会话中用户明确确认的目标。自然语言补齐参数后使用同一协议，不要求用户重复输入命令。加载 `bindings.md`，真实表解析后读取持久绑定，按代码证据定位子项目；没有可靠结论或出现冲突时及时询问，不从旧任务猜测、不保存未经核实的关联。
 - 将目录相对当前会话 cwd 解析（可展开开头的 `~/`），确认存在且是目录，取得真实路径后再执行。工作区不是飞书 Base 的 Workspace。路径只是数据，不执行其中的命令替换、变量或 shell 片段；构造 CLI 参数时安全引用，不把用户文本或文档内容直接拼接为 shell。

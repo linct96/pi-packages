@@ -1,10 +1,10 @@
 # create：创建漏洞跟踪记录
 
-用法：`/lark-workloop create <Wiki 父页面 URL>`。这是创建新资源及在归属明确时记录本地项目关联的授权；不改父页面正文，不改源模板或已有表。只支持 HTTPS 飞书/Lark `/wiki/<token>` 父页面，不接受云盘文件夹或未挂载 Wiki 的普通文档。
+用法：`/gkd-workloop create-lark-table <Wiki 父页面 URL>`。这是创建新资源及在归属明确时记录本地项目关联的授权；不改父页面正文，不改源模板或已有表。只支持 HTTPS 飞书/Lark `/wiki/<token>` 父页面，不接受云盘文件夹或未挂载 Wiki 的普通文档。
 
 ## 执行
 
-显式快捷命令转发到本 Skill，与原生 skill、自然语言创建使用同一流程，由当前主 Agent 指导并调用现有脚本。
+显式快捷命令转发到本 Skill，与自然语言创建使用同一流程，由当前主 Agent 指导并调用现有脚本。
 
 先校验参数：必须且只能提供一个 Wiki 父页面 URL，允许用引号包裹；缺少时先询问，额外参数或不支持的链接先报告用法并停止，不执行脚本。URL 的严格校验仍由脚本负责。参数齐备后，先简短告知正在创建，再仅执行一次以下脚本（路径相对本技能目录；使用工具参数或安全 shell 引用传入 URL）：
 
@@ -12,7 +12,7 @@
 node --experimental-strip-types <技能目录>/scripts/create.ts '<Wiki 父页面 URL>'
 ```
 
-不要把 URL 拼成未引用的 shell 文本，不将 `/lark-workloop` 当 shell 命令。无需预跑 check、读取问题记录或再抓远端模板；不启动其他模型或子 agent。
+不要把 URL 拼成未引用的 shell 文本，不将 `/gkd-workloop` 当 shell 命令。无需预跑 check、读取问题记录或再抓远端模板；不启动其他模型或子 agent。
 
 脚本读取 `assets/issue-tracker.json`，显式使用 `lark-cli --as user`：解析父节点 → 创建带字段的空 Base → 挂到父节点下 → 复用新表默认 grid 并配置三个视图 → 核对字段与父节点 → 添加一条待确认分组的示例数据。输出只包含创建状态和新资源坐标，不回传原始 CLI 数据。
 
