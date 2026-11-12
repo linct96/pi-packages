@@ -6,8 +6,7 @@ export function registerWorkloopCommand(
   prepare: (input: string, ctx: ExtensionContext) => false | void | (() => void) = () => {},
 ) {
   pi.registerCommand("gkd-workloop", {
-    description:
-      "统一工作流：开发任务、飞书问题表、check-lark、create-lark-table；支持自然语言",
+    description: "统一工作流：开发任务、飞书问题表、check-lark、create-lark-table；支持自然语言",
     handler: async (args, ctx) => {
       if (!ctx.isIdle() || ctx.hasPendingMessages()) {
         pi.sendMessage(
@@ -20,7 +19,7 @@ export function registerWorkloopCommand(
         );
         return;
       }
-      let rollback: void | (() => void);
+      let rollback: (() => void) | undefined;
       try {
         const input = args.trim();
         const result = prepare(input, ctx);

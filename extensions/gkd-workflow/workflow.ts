@@ -21,7 +21,10 @@ import {
 } from "./state.ts";
 
 const INSTRUCTIONS = readFileSync(new URL("./workflow.md", import.meta.url), "utf8").trim();
-const LARK_GUIDE = readFileSync(new URL("./integrations/lark/gkd.md", import.meta.url), "utf8").trim();
+const LARK_GUIDE = readFileSync(
+  new URL("./integrations/lark/gkd.md", import.meta.url),
+  "utf8",
+).trim();
 const ENTRY = "gkd-task";
 const REPORT = "gkd_report";
 const EVIDENCE = "gkd_route_evidence";
@@ -176,7 +179,7 @@ export function registerWorkflow(
     return "\n" + describe();
   }
   function startRouting(ctx: ExtensionContext, inlinePrompt?: string) {
-    router.start(state!.task, ctx, routed, inlinePrompt);
+    router.start(state!.task, ctx, routed, inlinePrompt, bridgeHandoff);
     status(ctx);
   }
   function approve(ctx: ExtensionContext, taskId: string, version: number) {
@@ -201,7 +204,11 @@ export function registerWorkflow(
       ctx.ui.notify("用法：/gkd <任务>（最多 16000 字符）", "warning");
       return;
     }
-    if ((!options.allowActiveRun && !ctx.isIdle()) || router.isActive() || (state && !terminal(state.phase))) {
+    if (
+      (!options.allowActiveRun && !ctx.isIdle()) ||
+      router.isActive() ||
+      (state && !terminal(state.phase))
+    ) {
       ctx.ui.notify("已有任务尚未结束；可以说“继续上次任务”或“取消当前任务”。", "warning");
       return;
     }
@@ -296,11 +303,11 @@ export function registerWorkflow(
       }
       return {
         content: [{ type: "text", text: "GKD routing started in this session." }],
+        details: { started: true },
         terminate: true,
       };
     },
   });
-
 
   pi.registerTool({
     name: REPORT,

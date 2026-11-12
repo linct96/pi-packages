@@ -24,7 +24,10 @@ import {
 } from "../extensions/gkd-workflow/judge-route/index.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createTracker } from "../extensions/gkd-workflow/integrations/lark/scripts/create.ts";
-import { bindingsPath, manageBindings } from "../extensions/gkd-workflow/integrations/lark/scripts/bindings.ts";
+import {
+  bindingsPath,
+  manageBindings,
+} from "../extensions/gkd-workflow/integrations/lark/scripts/bindings.ts";
 import {
   CACHE_TTL_MS,
   REQUIRED_SCOPES,
@@ -271,7 +274,10 @@ async function verifyLarkCreate() {
   const parent = "https://example.feishu.cn/wiki/parent123?table=ignored&view=ignored";
   const template = JSON.parse(
     await readFile(
-      new URL("../extensions/gkd-workflow/integrations/lark/assets/issue-tracker.json", import.meta.url),
+      new URL(
+        "../extensions/gkd-workflow/integrations/lark/assets/issue-tracker.json",
+        import.meta.url,
+      ),
       "utf8",
     ),
   );
@@ -658,11 +664,18 @@ test("package exposes the workflow and standalone route debugging stays inert", 
   assert.ok(manifest.pi.extensions.includes("./extensions/gkd-workflow/index.ts"));
   assert.deepEqual(manifest.pi.skills, ["./extensions/gkd-workflow/gkd-workloop"]);
   assert.ok(!manifest.pi.extensions.includes("./extensions/lark-workloop/index.ts"));
-  const larkDir = fileURLToPath(new URL("../extensions/gkd-workflow/integrations/lark/", import.meta.url));
-  const mainDir = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-workloop/", import.meta.url));
+  const larkDir = fileURLToPath(
+    new URL("../extensions/gkd-workflow/integrations/lark/", import.meta.url),
+  );
+  const mainDir = fileURLToPath(
+    new URL("../extensions/gkd-workflow/gkd-workloop/", import.meta.url),
+  );
   const mainSkills = loadSkillsFromDir({ dir: mainDir, source: "path" });
   assert.deepEqual(mainSkills.diagnostics, []);
-  assert.deepEqual(mainSkills.skills.map((skill) => skill.name), ["gkd-workloop"]);
+  assert.deepEqual(
+    mainSkills.skills.map((skill) => skill.name),
+    ["gkd-workloop"],
+  );
   const larkSkill = await readFile(join(larkDir, "SKILL.md"), "utf8");
   const checkFlow = await readFile(join(larkDir, "references/check.md"), "utf8");
   const createFlow = await readFile(join(larkDir, "references/create.md"), "utf8");
@@ -679,7 +692,7 @@ test("package exposes the workflow and standalone route debugging stays inert", 
   assert.match(workflow, /GKD 状态机的衔接/);
   assert.match(checkFlow, /--invalidate.*仅运行.*清缓存/);
   const bindings = await readFile(join(larkDir, "references/bindings.md"), "utf8");
-  assert.match(bindings, /baseToken \\+ tableId/);
+  assert.ok(bindings.includes("baseToken + tableId"));
   assert.match(bindings, /不覆盖旧关联或把 user 降为 inferred/);
   assert.match(workflow, /默认只执行一轮 loop/);
   assert.match(workflow, /按 P0 → P1 → P2 → 未分级排序/);
@@ -691,10 +704,15 @@ test("package exposes the workflow and standalone route debugging stays inert", 
   await verifyLarkCreate();
   await verifyLarkBindings();
   assert.ok(manifest.files.includes("extensions"));
-  const skillDir = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-workloop/", import.meta.url));
+  const skillDir = fileURLToPath(
+    new URL("../extensions/gkd-workflow/gkd-workloop/", import.meta.url),
+  );
   const discovered = loadSkillsFromDir({ dir: skillDir, source: "path" });
   assert.deepEqual(discovered.diagnostics, []);
-  assert.deepEqual(discovered.skills.map((skill) => skill.name), ["gkd-workloop"]);
+  assert.deepEqual(
+    discovered.skills.map((skill) => skill.name),
+    ["gkd-workloop"],
+  );
   const app = router();
   assert.deepEqual([...app.commands.keys()], ["gkd-judge-route"]);
   assert.deepEqual(app.notifications, []);

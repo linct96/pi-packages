@@ -182,7 +182,11 @@ function harness(cwd, options = {}) {
 
 test("loading is inert and only the three existing commands are registered", async () => {
   const app = harness(await project());
-  assert.deepEqual([...app.commands.keys()].sort(), ["gkd-judge-route", "gkd-settings", "gkd-workloop"]);
+  assert.deepEqual([...app.commands.keys()].sort(), [
+    "gkd-judge-route",
+    "gkd-settings",
+    "gkd-workloop",
+  ]);
   assert.deepEqual([...app.shortcuts.keys()], ["super+shift+g"]);
   assert.deepEqual(app.activeTools(), originalTools);
   assert.equal(await app.event("tool_call", { toolName: "write", input: {} }), undefined);

@@ -9,14 +9,14 @@ description: 唯一 GKD 工作流入口。处理 /gkd-workloop 开发任务、�
 
 ## 意图与用法
 
-| 意图 | 命令（可选，优先识别） | 动作 |
-| --- | --- | --- |
-| 通用开发 | `/gkd-workloop <开发任务>` | 调用 `gkd_workloop_start`，交 GKD FAST/STANDARD 状态机 |
-| 处理飞书问题 | `/gkd-workloop <飞书问题表 URL>` | 调用内部 Lark 读取候选，再交 GKD |
-| 检查飞书授权 | `/gkd-workloop check-lark [--force\|--invalidate]` | 仅按内部 Lark check 流程执行 |
-| 创建问题表 | `/gkd-workloop create-lark-table <Wiki 父页面 URL>` | 仅按内部 Lark create 流程执行 |
-| 管理项目关联 | `/gkd-workloop 查看/修改飞书表关联…` | 仅管理 Lark 本地关联 |
-| 使用说明 | `/gkd-workloop` | 简短说明用法，不检查环境、不启动任务 |
+| 意图         | 命令（可选，优先识别）                              | 动作                                                   |
+| ------------ | --------------------------------------------------- | ------------------------------------------------------ |
+| 通用开发     | `/gkd-workloop <开发任务>`                          | 调用 `gkd_workloop_start`，交 GKD FAST/STANDARD 状态机 |
+| 处理飞书问题 | `/gkd-workloop <飞书问题表 URL>`                    | 调用内部 Lark 读取候选，再交 GKD                       |
+| 检查飞书授权 | `/gkd-workloop check-lark [--force\|--invalidate]`  | 仅按内部 Lark check 流程执行                           |
+| 创建问题表   | `/gkd-workloop create-lark-table <Wiki 父页面 URL>` | 仅按内部 Lark create 流程执行                          |
+| 管理项目关联 | `/gkd-workloop 查看/修改飞书表关联…`                | 仅管理 Lark 本地关联                                   |
+| 使用说明     | `/gkd-workloop`                                     | 简短说明用法，不检查环境、不启动任务                   |
 
 自然语言等价有效：“检查飞书授权”“在这个 Wiki 下创建问题表 <URL>”“处理这张飞书问题表 <URL>”“修复登录 BUG”。不要依赖简单关键词匹配；以真实意图、链接及上下文判定。只有 URL 且指向可用问题表，默认按处理现有问题表解释；建表必须有明确创建意图。缺关键 URL、目标或范围时只问必要的一项，确认之前不读飞书或修改代码。多个操作按用户明确顺序串行执行，失败时暂停。
 

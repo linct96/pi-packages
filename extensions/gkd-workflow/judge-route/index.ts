@@ -744,6 +744,7 @@ export function registerJudgeRoute(
     ctx: ExtensionContext,
     receiver?: RouteReceiver,
     inlinePrompt?: string,
+    queueWhenBusy = false,
   ) {
     if (active) throw new Error("Route investigation already active");
     active = {
@@ -756,7 +757,11 @@ export function registerJudgeRoute(
       receiver,
     };
     pi.setActiveTools([EVIDENCE_TOOL, RESULT_TOOL]);
-    if (inlinePrompt === undefined) pi.sendUserMessage(active.prompt);
+    if (inlinePrompt === undefined)
+      pi.sendUserMessage(
+        active.prompt,
+        queueWhenBusy ? { streamingBehavior: "followUp" } : undefined,
+      );
   }
   return { start, stop: restoreTools, isActive: () => !!active };
 }
