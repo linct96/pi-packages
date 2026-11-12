@@ -1,6 +1,6 @@
 ---
 name: lark-workloop
-description: 基于飞书多维表格管理测试反馈与验收问题，支持创建问题表、关联本地项目、处理交付给 AI 的问题并回写结果。用户需要使用或了解 lark-workloop 工作流时使用。
+description: 创建飞书多维表格测试问题表、管理问题表与本地项目关联，处理交付给 AI 的 BUG、优化和需求，修复代码后回写状态。用户要求执行 /lark-workloop check/create/work、管理项目关联，或让 AI 处理飞书问题表时使用。
 compatibility: 流程咨询无需安装工具；执行 check/create/work 需要 Node.js >= 22.19.0 和 lark-cli。
 ---
 
@@ -23,6 +23,8 @@ compatibility: 流程咨询无需安装工具；执行 check/create/work 需要 
    | 检查执行环境 | `check`；强制复检用 `check --force`；清除检查缓存用 `check --invalidate` | [环境检查](references/check.md)    |
 
 3. **按说明执行**：遵循对应文件的参数、权限、操作步骤和反馈要求。处理问题所需的环境检查与项目关联，按问题处理流程加载，不提前作为所有操作的前置步骤。
+
+真实飞书操作依赖 `lark-cli`；Base、Wiki、旧电子表格和授权操作按需读取 `lark-base`、`lark-wiki`、`lark-sheets`、`lark-shared`。对应 CLI Skill 不可用时先查 CLI 官方帮助；无法确认命令和结果格式则暂停，不猜测操作。
 
 命令前加 `/lark-workloop` 即可使用，也可以直接用自然语言提出需求，例如：“处理这张问题表中的问题，项目在当前目录。” 项目关联只管理本地关联，不启动修复或写入飞书。
 

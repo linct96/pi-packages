@@ -4,19 +4,20 @@
 
 成功检查保存在 `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lark-workloop/preflight.json`：`version: 1`、毫秒时间戳 `checkedAt`、已确认的基础 `scopes`。默认失效时间为 **7 天**，从成功复检完成时算起，不因缓存命中续期。
 
-1. 由当前主 Agent 先核对当前步骤的参数：无参数、`--force` 或 `--invalidate`，不接受其他值或组合。快捷入口、原生 skill 和自然语言分发统一按以下步骤执行；入口不会预先检查或注入检查结果。只复用当前步骤的本次结果，不把先前步骤、表格、附件或旧记录的状态当作本次检查。
-   - `--invalidate`：仅运行本节的清缓存命令，返回 `invalidated` 后记录当前步骤完成并返回调度，不检查 CLI、不发起授权，也不注销登录。
-   - `--force`：直接运行脚本 `--force`，不因缓存有效而跳过。
-   - 无参数：先读取成功缓存；版本正确、时间不在未来且距当前不足 7 天、权限集覆盖技能根目录 `scripts/preflight.ts` 的 `REQUIRED_SCOPES` 时，可以跳过 TS 脚本与 CLI 复检；由主 Agent 按以上条件判断是否复用，不调用 CLI。
-2. 缓存缺失、过期、损坏、权限集变化，或用户明确要求重新检查时，运行（`<skill-dir>` 是本技能目录的真实路径）：
+1. 先确认参数只能为无参数、`--force` 或 `--invalidate`，不接受其他值或组合。参数不合法时报告用法并停止；所有入口统一调用同一脚本，由脚本判定缓存和 CLI 状态。
+2. 按本次参数执行以下命令之一（`<skill-dir>` 是本技能目录的真实路径）：
 
    ```bash
    node --experimental-strip-types "<skill-dir>/scripts/preflight.ts"
-   # 授权完成、切换 CLI 账号/应用/profile 或用户要求复检时：
    node --experimental-strip-types "<skill-dir>/scripts/preflight.ts" --force
+   node --experimental-strip-types "<skill-dir>/scripts/preflight.ts" --invalidate
    ```
 
-   脚本通过 `lark-cli auth status --json --verify` 同时确认 CLI 可执行、用户登录已被服务端验证，以及 Base 读取/回写、Wiki/电子表格定位和附件下载的基础 scopes。仅完整成功才写缓存；不存 token、密钥、授权 URL 或 device code。基础权限通过不代表具体表格的资源访问权限已经通过。
+   - 无参数：由脚本判断缓存是否有效；命中时返回 `ready` 且 `cached: true`，不再调用 CLI。缓存版本、时间及 `REQUIRED_SCOPES` 的校验只在脚本中维护，Agent 不重复实现。
+   - `--force`：忽略缓存并调用 CLI 重新验证登录与基础权限。
+   - `--invalidate`：仅运行脚本清缓存，收到 `invalidated` 后完成本步骤并返回调度，不检查 CLI、不发起授权、不注销登录。
+
+   只有需要复检时，脚本才调用 `lark-cli auth status --json --verify` 核实 CLI、登录和基础 scopes；仅成功时写入缓存。缓存不存 token、密钥、授权链接或设备码，基础权限通过不代表具体表格的资源 ACL 已通过。
 
 3. `missing-cli`：明确提示安装官方 lark-cli 并配置 PATH 后重新调用，停止本轮；不自动安装，不改用 bot、浏览器或其他集成绕过检查。官方安装说明：https://github.com/larksuite/cli 。缓存有效期间 CLI 被卸载时，后续命令失败同样使缓存失效。
 4. `needs-auth`：先读取 `lark-shared` 及身份/权限参考；没有独立 skill 时可按 CLI 帮助读取内嵌说明。核对应用是否已配置，按说明引导用户，不索取明文密钥。不用 `--domain all`：基于本次 `missingScopes` 发起最小范围授权：
