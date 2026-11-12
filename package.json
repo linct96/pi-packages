@@ -17,6 +17,7 @@
   },
   "scripts": {
     "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
     "lint": "oxlint --deny-warnings .",
     "check": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
