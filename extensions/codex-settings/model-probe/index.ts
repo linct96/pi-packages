@@ -13,7 +13,12 @@ export const HANDOFF_ENTRY = "codex-settings:model-probe-handoff";
 
 // Commands are intercepted before they add conversation entries. A registered
 // gate belongs to the active Pi session; absent Model Probe is not a blocker.
-const workloopGates = new Map<string, (request: string, ctx: ExtensionContext) => boolean>();
+type WorkloopGate = (request: string, ctx: ExtensionContext) => boolean;
+const globalProbeRegistry = globalThis as typeof globalThis & {
+  __linct96WorkloopProbeGates?: Map<string, WorkloopGate>;
+};
+const workloopGates =
+  (globalProbeRegistry.__linct96WorkloopProbeGates ??= new Map<string, WorkloopGate>());
 export function deferWorkloopForProbe(request: string, ctx: ExtensionContext): boolean {
   return workloopGates.get(ctx.sessionManager.getSessionId())?.(request, ctx) ?? false;
 }
