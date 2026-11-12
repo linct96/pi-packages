@@ -192,6 +192,11 @@ export async function manageBindings(input: unknown) {
       if (bindings.some((item, i) => i !== index && targetKey(item) === targetKey(binding))) {
         throw new BindingError("目标关联已存在：请核对后修改，不合并或覆盖其他关联。");
       }
+      if (previous?.source === "user" && binding.source === "inferred") {
+        throw new BindingError(
+          "已有用户确认的项目关联：不能用自动推断覆盖，请保留原关联或让用户确认变更。",
+        );
+      }
       if (previous) bindings[index] = { ...binding, id: previous.id };
       else bindings.push(binding);
     } else {

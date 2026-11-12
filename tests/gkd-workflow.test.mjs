@@ -649,6 +649,33 @@ async function verifyLarkBindings() {
     assert.equal(current.bindings.length, 3);
     assert.equal(current.bindings.find((item) => item.id === adminId).project, "apps/admin");
     assert.equal(current.bindings.find((item) => item.id === webId).source, "user");
+    // 同键保存和按 id 迁移均不能将人工确认的关联降级为自动推断。
+    for (const inferred of [
+      { ...binding, project: "apps/moved", evidence: "自动推断" },
+      { ...binding, id: webId, project: "apps/moved", evidence: "自动推断" },
+    ]) {
+      await assert.rejects(
+        manageBindings({
+          action: "save",
+          expectedRevision: current.revision,
+          binding: inferred,
+        }),
+        /用户确认.*不能用自动推断覆盖/,
+      );
+    }
+    assert.equal((await manageBindings({ action: "read" })).revision, current.revision);
+    current = await manageBindings({
+      action: "save",
+      expectedRevision: current.revision,
+      binding: {
+        ...binding,
+        id: webId,
+        project: "apps/moved",
+        source: "user",
+        evidence: "用户再次确认项目归属",
+      },
+    });
+    assert.equal(current.bindings.find((item) => item.id === webId).source, "user");
     const before = await readFile(bindingsPath(), "utf8");
     await assert.rejects(
       manageBindings({ action: "save", expectedRevision: emptyRevision, binding }),
