@@ -14,7 +14,7 @@ description: GKD Workloop 的内部飞书适配说明。仅供 gkd-workloop 主 
 | 查询、保存、修改本地项目绑定   | [bindings](references/bindings.md) |
 | 扫描、筛选和处理现有问题表     | [workflow](references/workflow.md) |
 
-执行 `check-lark`、`create-lark-table`、绑定管理时，不调用 GKD 开发桥接工具，不创建 GKD task，也不要求当前目录是 Git 仓库。缺少必要参数、授权或权限时按参考暂停；仅真实操作成功时报告成功。
+执行 `check-lark`、`create-lark-table`、绑定管理时，不调用 GKD 开发桥接工具，不创建 GKD task，也不要求当前目录是 Git 仓库。缺少必要参数、授权或权限时按参考暂停；需要等待用户补全或扫码时先调用 `gkd_workloop_wait` 保存上下文；仅真实操作成功时报告成功。
 
 飞书问题处理分两段：
 

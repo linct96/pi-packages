@@ -1584,7 +1584,7 @@ test(
     assert.equal(stateOf(h.runtime.session.sessionManager).attempt, 3);
     assert.equal(stateOf(h.runtime.session.sessionManager).phase, "FAILED");
     await h.runtime.session.prompt("do not overwrite");
-    await h.runtime.session.prompt("/gkd change value.txt");
+    await h.runtime.session.prompt("/gkd-workloop change value.txt");
     await tick();
     await h.runtime.session.waitForIdle();
     assert.equal(h.faux.state.callCount, 3);

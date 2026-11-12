@@ -51,6 +51,7 @@ type WorkloopRequest = {
   request: string;
   phase: "ready" | "waiting";
   updatedAt: number;
+  continuation?: boolean;
 };
 const waitSchema = Type.Object(
   { reason: Type.Union([
@@ -479,7 +480,7 @@ export function registerWorkflow(
     try { automatic = autoEnabled(ctx); } catch { /* no automatic dispatch on settings failure */ }
     if (!pending && (explicitlyRouted || automatic))
       prepareRequest(text.replace(/^\/(?:skill:)?gkd-workloop\s*/, "").trim(), ctx);
-    if (automatic || explicitlyRouted || pending?.phase === "waiting")
+    if (automatic || explicitlyRouted || pending?.continuation || pending?.phase === "waiting")
       return { systemPrompt: `${event.systemPrompt}\n\nWorkloop request routing instructions:\n${WORKLOOP_GUIDE}` };
   });
   pi.on("tool_call", (event, ctx) => {
@@ -532,7 +533,7 @@ export function registerWorkflow(
           ctx.ui.notify("本次补充使任务超过 16000 字符，请缩短后重试。", "warning");
           return { action: "handled" };
         }
-        pending = { ...pending, request: supplemented, phase: "ready", updatedAt: Date.now() };
+        pending = { ...pending, request: supplemented, phase: "ready", continuation: true, updatedAt: Date.now() };
         exposeWorkloop();
         return;
       }
