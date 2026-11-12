@@ -532,10 +532,10 @@ test("auto-mode development rejects untrusted projects, absent models and oversi
     if (kind === "untrusted") app.ctx.isProjectTrusted = () => false;
     if (kind === "model") app.ctx.model = undefined;
     await app.input(kind === "length" ? "x".repeat(16001) : "Task");
-    const result = await app.invoke("gkd_workloop_start", { kind: "development" });
-    if (kind === "length") {
-      assert.ok(result.blocked !== true, "the start tool reports a recoverable input error");
-    }
+    await assert.rejects(
+      app.invoke("gkd_workloop_start", { kind: "development" }),
+      /Unable to start GKD development workflow/,
+    );
     assert.equal(app.state(), undefined);
     assert.ok(app.notices.length > 0);
   }
