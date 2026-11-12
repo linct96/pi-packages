@@ -764,10 +764,7 @@ export function registerJudgeRoute(
     };
     pi.setActiveTools([EVIDENCE_TOOL, RESULT_TOOL]);
     if (inlinePrompt === undefined)
-      pi.sendUserMessage(
-        active.prompt,
-        queueWhenBusy ? { deliverAs: "followUp" } : undefined,
-      );
+      pi.sendUserMessage(active.prompt, queueWhenBusy ? { deliverAs: "followUp" } : undefined);
   }
   return { start, stop: restoreTools, isActive: () => !!active };
 }

@@ -21,7 +21,10 @@ import {
 } from "./state.ts";
 
 const INSTRUCTIONS = readFileSync(new URL("./workflow.md", import.meta.url), "utf8").trim();
-const ROUTE_GUIDE = readFileSync(new URL("./judge-route/workflow.md", import.meta.url), "utf8").trim();
+const ROUTE_GUIDE = readFileSync(
+  new URL("./judge-route/workflow.md", import.meta.url),
+  "utf8",
+).trim();
 const LARK_GUIDE = readFileSync(
   new URL("./integrations/lark/gkd.md", import.meta.url),
   "utf8",
@@ -304,7 +307,12 @@ export function registerWorkflow(
       }
       bridgeHandoff = false;
       return {
-        content: [{ type: "text", text: `GKD ROUTING is active. Only gkd_route_evidence and gkd_judge_route are authorized. Classify the current task using the following policy and report the exact JSON through gkd_judge_route. Do not modify code during ROUTING.\n\n${ROUTE_POLICY}\n\n${ROUTE_GUIDE}` }],
+        content: [
+          {
+            type: "text",
+            text: `GKD ROUTING is active. Only gkd_route_evidence and gkd_judge_route are authorized. Classify the current task using the following policy and report the exact JSON through gkd_judge_route. Do not modify code during ROUTING.\n\n${ROUTE_POLICY}\n\n${ROUTE_GUIDE}`,
+          },
+        ],
         details: { started: true },
       };
     },

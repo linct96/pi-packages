@@ -27,7 +27,7 @@ export function registerWorkloopCommand(
           ctx.ui.notify("已有 GKD 任务尚未结束；请先恢复或取消当前任务。", "warning");
           return;
         }
-        rollback = result;
+        rollback = typeof result === "function" ? result : undefined;
         pi.sendMessage(
           {
             customType: "gkd-workloop-context",
