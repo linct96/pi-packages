@@ -575,7 +575,8 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       !event.streamingBehavior &&
       ctx.isIdle() &&
       (event.text.trim() || event.images?.length) &&
-      (!event.text.trimStart().startsWith("/") || /^\\/skill:gkd-workloop(?:\\s|$)/.test(event.text.trimStart())) &&
+      (!event.text.trimStart().startsWith("/") ||
+        event.text.trimStart().startsWith("/skill:gkd-workloop ")) &&
       !hasConversation(ctx)
     ) {
       state = {
