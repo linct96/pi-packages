@@ -314,6 +314,7 @@ export function registerWorkflow(
 
   registerWorkloopCommand(pi, (request, ctx) => {
     if (router.isActive() || (state && !terminal(state.phase))) return false;
+    if (pending?.phase === "waiting" || pending?.continuation) clearPending(true);
     prepareRequest(request, ctx);
     return () => clearPending();
   });
@@ -551,7 +552,17 @@ export function registerWorkflow(
         return;
       // A user answer continues only a previously saved waiting request.
       if (pending?.phase === "waiting" && pending.sessionId === ctx.sessionManager.getSessionId()) {
-        if (text.startsWith("/") && !text.startsWith("/skill:gkd-workloop")) return;
+        if (/^(?:取消|放弃|取消当前任务|stop|cancel)[。.!！]?$/i.test(text)) {
+          clearPending(true);
+          ctx.ui.notify("已取消尚未启动的 Workloop 请求。", "info");
+          return { action: "handled" };
+        }
+        if (text.startsWith("/skill:gkd-workloop")) {
+          clearPending(true);
+          prepareRequest(text.replace(/^\/skill:gkd-workloop\s*/, ""), ctx);
+          return;
+        }
+        if (text.startsWith("/")) return;
         const supplemented = `${pending.request}\n用户补充：${text}`;
         if (supplemented.length > 16000) {
           ctx.ui.notify("本次补充使任务超过 16000 字符，请缩短后重试。", "warning");
@@ -695,7 +706,7 @@ export function registerWorkflow(
     };
   });
   pi.on("agent_settled", (event, ctx) => {
-    if (pending?.phase !== "waiting") clearPending();
+    if (pending?.phase !== "waiting") clearPending(Boolean(pending?.continuation));
     if (running(ctx) && (event.aborted || state?.phase !== "AWAITING_APPROVAL"))
       pause(ctx, event.aborted ? "Pi 原生中断，可恢复。" : "Agent 已停止，可恢复。");
     draining = false;
@@ -731,7 +742,10 @@ export function registerWorkflow(
         data.sessionId === ctx.sessionManager.getSessionId() &&
         data.cwd === realpathSync(ctx.cwd) &&
         typeof data.request === "string" &&
-        data.request.length <= 16000
+        data.request.length <= 16000 &&
+        typeof data.updatedAt === "number" &&
+        data.updatedAt <= Date.now() + 60000 &&
+        Date.now() - data.updatedAt < 24 * 60 * 60 * 1000
       ) {
         pending = data;
         exposeWorkloop();

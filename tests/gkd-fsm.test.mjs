@@ -402,6 +402,22 @@ test("NONE/DIRECT exit development control and routing failures block instead of
   assert.equal(app.state().phase, "ROUTING");
 });
 
+test("waiting request persists across session reload but cancellation clears authorization", async () => {
+  const cwd = await project();
+  const app = harness(cwd);
+  await app.commands.get("gkd-workloop").handler("处理飞书问题表", app.ctx);
+  await app.invoke("gkd_workloop_wait", { reason: "lark-auth" });
+  await app.event("agent_settled", { aborted: false });
+  const reloaded = harness(cwd, { entries: app.entries });
+  await reloaded.event("session_start");
+  assert.ok(reloaded.activeTools().includes("gkd_workloop_wait"));
+  assert.equal((await reloaded.input("取消")).action, "handled");
+  assert.ok(!reloaded.activeTools().includes("gkd_workloop_start"));
+  const again = harness(cwd, { entries: reloaded.entries });
+  await again.event("session_start");
+  assert.ok(!again.activeTools().includes("gkd_workloop_start"));
+});
+
 test("global auto mode loads semantic Skill routing without duplicating input", async (t) => {
   const path = join(process.env.PI_CODING_AGENT_DIR, "gkd-workflow.json");
   t.after(() => rm(path, { force: true }));
