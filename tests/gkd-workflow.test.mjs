@@ -23,9 +23,8 @@ import {
   ROUTE_POLICY,
 } from "../extensions/gkd-workflow/judge-route/index.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import larkWorkloop from "../extensions/lark-workloop/index.ts";
-import { createTracker } from "../extensions/lark-workloop/scripts/create.ts";
-import { bindingsPath, manageBindings } from "../extensions/lark-workloop/scripts/bindings.ts";
+import { createTracker } from "../extensions/gkd-workflow/integrations/lark/scripts/create.ts";
+import { bindingsPath, manageBindings } from "../extensions/gkd-workflow/integrations/lark/scripts/bindings.ts";
 import {
   CACHE_TTL_MS,
   REQUIRED_SCOPES,
@@ -33,7 +32,7 @@ import {
   invalidatePreflightCache,
   preflightCachePath,
   readPreflightCache,
-} from "../extensions/lark-workloop/scripts/preflight.ts";
+} from "../extensions/gkd-workflow/integrations/lark/scripts/preflight.ts";
 
 const parseRoute = (raw) => parseRouteResponse(JSON.stringify(raw));
 const originalTools = ["read", "bash", "edit", "write"];
@@ -155,77 +154,7 @@ async function verifyLarkPreflight() {
     process.env.LARK_TEST_CALLS = join(root, "calls.ndjson");
     assert.equal((await checkLarkCli()).status, "missing-cli");
     assert.equal(await readPreflightCache(), undefined);
-    const commands = new Map();
-    const sent = [];
-    const reported = [];
-    const hidden = [];
-    let failDispatch = false;
-    larkWorkloop({
-      registerCommand: (name, command) => commands.set(name, command),
-      on: () => assert.fail("Shortcut must not register check lifecycle hooks"),
-      sendUserMessage: (...args) => {
-        assert.deepEqual(hidden.at(-1), {
-          customType: "lark-workloop-context",
-          content: context,
-          display: false,
-        });
-        if (failDispatch) throw new Error("private-dispatch-details");
-        sent.push(args);
-      },
-      sendMessage: (message, options) => {
-        assert.deepEqual(options, { triggerTurn: false });
-        (message.customType === "lark-workloop-context" ? hidden : reported).push(message);
-      },
-    });
-    assert.deepEqual([...commands.keys()], ["lark-workloop"]);
-    assert.deepEqual(sent, []);
-    const run = commands.get("lark-workloop").handler;
-    const idle = { cwd: root, isIdle: () => true, hasPendingMessages: () => false };
-    const context = `\n\n[lark-workloop 当前会话]\n${JSON.stringify({ cwd: root })}`;
-    const inputs = [
-      "",
-      "  ",
-      "检查一下授权",
-      "清除授权缓存，然后检查一下授权",
-      'work --larkurl https://example.feishu.cn/wiki/Abc123 --workspace "/tmp/my project"',
-      "work",
-      "work --larkurl https://example.feishu.cn/wiki/Abc123",
-      "check",
-      "check --force",
-      "check --invalidate",
-      "check --unknown",
-      "check --force --invalidate",
-      "unknown",
-    ];
-    for (const input of inputs) await run(input, idle);
-    assert.deepEqual(
-      sent,
-      inputs.map((input) => [
-        `/skill:lark-workloop ${input.trim()}`,
-        { expandPromptTemplates: true },
-      ]),
-    );
-    assert.deepEqual(reported, []);
-    assert.equal(await readPreflightCache(), undefined);
-    await assert.rejects(readFile(process.env.LARK_TEST_CALLS), { code: "ENOENT" });
-    const sentCount = sent.length;
-    failDispatch = true;
-    await run("check", idle);
-    assert.equal(reported[0].customType, "lark-workloop");
-    assert.match(reported[0].content, /分发未完成.*核对当前任务状态/s);
-    assert.doesNotMatch(reported.pop().content, /private-dispatch-details/);
-    failDispatch = false;
-    assert.equal(hidden.length, inputs.length + 1);
-    const hiddenCount = hidden.length;
-    for (const input of ["", "check", "work"]) {
-      for (const busy of [{ isIdle: () => false }, { hasPendingMessages: () => true }]) {
-        await run(input, { ...idle, ...busy });
-        assert.equal(reported.at(-1).customType, "lark-workloop");
-        assert.match(reported.pop().content, /操作未开始：Agent 正忙/);
-      }
-    }
-    assert.equal(sent.length, sentCount);
-    assert.equal(hidden.length, hiddenCount);
+    // Integration check is now internal; command dispatch is covered by GKD tests.
     await mkdir(preflightCachePath(), { recursive: true });
     await assert.rejects(checkLarkCli(), /无法读取.*缓存/);
     await assert.rejects(invalidatePreflightCache());
@@ -260,7 +189,7 @@ async function verifyLarkPreflight() {
     assert.equal(await readPreflightCache(), undefined);
     process.env.LARK_TEST_STATUS = JSON.stringify({ identities: { user } });
     const script = fileURLToPath(
-      new URL("../extensions/lark-workloop/scripts/preflight.ts", import.meta.url),
+      new URL("../extensions/gkd-workflow/integrations/lark/scripts/preflight.ts", import.meta.url),
     );
     const checked = JSON.parse(
       (await exec(process.execPath, ["--experimental-strip-types", script, "--force"])).stdout,
@@ -274,22 +203,6 @@ async function verifyLarkPreflight() {
     if (process.platform !== "win32")
       assert.equal((await stat(preflightCachePath())).mode & 0o777, 0o600);
     const before = await readFile(process.env.LARK_TEST_CALLS, "utf8");
-    await run("解释工作流", idle);
-    await run("  处理指定问题表，绑定 apps/example  ", idle);
-    await run("check", idle);
-    await run("check --force", idle);
-    await run("check --invalidate", idle);
-    assert.deepEqual(
-      sent,
-      [
-        "解释工作流",
-        "处理指定问题表，绑定 apps/example",
-        "check",
-        "check --force",
-        "check --invalidate",
-      ].map((input) => [`/skill:lark-workloop ${input}`, { expandPromptTemplates: true }]),
-    );
-    assert.deepEqual(reported, []);
     assert.equal((await checkLarkCli()).cached, true);
     assert.equal(await readFile(process.env.LARK_TEST_CALLS, "utf8"), before);
     assert.equal((await readPreflightCache()).checkedAt, cache.checkedAt);
@@ -358,7 +271,7 @@ async function verifyLarkCreate() {
   const parent = "https://example.feishu.cn/wiki/parent123?table=ignored&view=ignored";
   const template = JSON.parse(
     await readFile(
-      new URL("../extensions/lark-workloop/assets/issue-tracker.json", import.meta.url),
+      new URL("../extensions/gkd-workflow/integrations/lark/assets/issue-tracker.json", import.meta.url),
       "utf8",
     ),
   );
@@ -403,73 +316,9 @@ process.stdout.write(JSON.stringify({ok:true,identity:"user",data}));
       await assert.rejects(createTracker(input), /创建未开始.*知识库（Wiki）父页面链接/);
     }
     await assert.rejects(readFile(process.env.LARK_TEST_CALLS), { code: "ENOENT" });
-    const commands = new Map();
-    const sent = [];
-    const reported = [];
-    const hidden = [];
-    let failDispatch = false;
-    larkWorkloop({
-      registerCommand: (name, command) => commands.set(name, command),
-      on() {},
-      sendUserMessage: (...args) => {
-        assert.deepEqual(hidden.at(-1), {
-          customType: "lark-workloop-context",
-          content: context,
-          display: false,
-        });
-        if (failDispatch) throw new Error("private-dispatch-details");
-        sent.push(args);
-      },
-      sendMessage: (message, options) => {
-        assert.deepEqual(options, { triggerTurn: false });
-        (message.customType === "lark-workloop-context" ? hidden : reported).push(message);
-      },
-    });
-    const run = commands.get("lark-workloop").handler;
-    const idle = {
-      cwd: root,
-      isIdle: () => true,
-      hasPendingMessages: () => false,
-      hasUI: true,
-      ui: { setStatus: () => assert.fail("Create must use the Skill interaction flow") },
-    };
-    const context = `\n\n[lark-workloop 当前会话]\n${JSON.stringify({ cwd: root })}`;
-    const inputs = [
-      "create",
-      `create ${parent} extra`,
-      ...invalidParents.map((url) => `create ${url}`),
-      `create ${parent}`,
-      `create "${parent}"`,
-    ];
-    for (const input of inputs) await run(`  ${input}  `, idle);
-    assert.deepEqual(
-      sent,
-      inputs.map((input) => [`/skill:lark-workloop ${input}`, { expandPromptTemplates: true }]),
-    );
-    assert.deepEqual(reported, []);
-    await run(`create ${parent}`, { ...idle, hasUI: false, ui: undefined });
-    assert.deepEqual(sent.at(-1), [
-      `/skill:lark-workloop create ${parent}`,
-      { expandPromptTemplates: true },
-    ]);
-    const sentCount = sent.length;
-    assert.equal(hidden.length, inputs.length + 1);
-    const hiddenCount = hidden.length;
-    for (const busy of [{ isIdle: () => false }, { hasPendingMessages: () => true }]) {
-      await run(`create ${parent}`, { ...idle, ...busy });
-      assert.equal(reported.at(-1).customType, "lark-workloop");
-      assert.match(reported.pop().content, /操作未开始：Agent 正忙/);
-    }
-    assert.equal(hidden.length, hiddenCount);
-    failDispatch = true;
-    await run(`create ${parent}`, idle);
-    assert.equal(reported.at(-1).customType, "lark-workloop");
-    assert.match(reported.at(-1).content, /分发未完成.*核对当前任务状态/s);
-    assert.doesNotMatch(reported.pop().content, /private-dispatch-details/);
-    assert.equal(sent.length, sentCount);
-    await assert.rejects(readFile(process.env.LARK_TEST_CALLS), { code: "ENOENT" });
+    // Internal table creation has no standalone shortcut; preserve its script contract.
     const script = fileURLToPath(
-      new URL("../extensions/lark-workloop/scripts/create.ts", import.meta.url),
+      new URL("../extensions/gkd-workflow/integrations/lark/scripts/create.ts", import.meta.url),
     );
     const result = JSON.parse(
       (await exec(process.execPath, ["--experimental-strip-types", script, parent])).stdout,
@@ -560,7 +409,6 @@ process.stdout.write(JSON.stringify({ok:true,identity:"user",data}));
       .split("\n")
       .map(JSON.parse);
     assert.equal(allCalls.at(-1)[1], "+base-create");
-    assert.deepEqual(reported, []);
   } finally {
     for (const key of keys) {
       if (saved[key] === undefined) delete process.env[key];
@@ -580,7 +428,7 @@ async function verifyLarkBindings() {
     for (const project of ["apps/web", "apps/admin", "apps/moved"])
       await mkdir(join(workspace, project), { recursive: true });
     const script = fileURLToPath(
-      new URL("../extensions/lark-workloop/scripts/bindings.ts", import.meta.url),
+      new URL("../extensions/gkd-workflow/integrations/lark/scripts/bindings.ts", import.meta.url),
     );
     const cli = (input) =>
       new Promise((resolve, reject) => {
@@ -766,7 +614,7 @@ async function verifyLarkBindings() {
       /原绑定不存在/,
     );
     const preflight = fileURLToPath(
-      new URL("../extensions/lark-workloop/scripts/preflight.ts", import.meta.url),
+      new URL("../extensions/gkd-workflow/integrations/lark/scripts/preflight.ts", import.meta.url),
     );
     await exec(process.execPath, ["--experimental-strip-types", preflight, "--invalidate"]);
     assert.equal((await manageBindings({ action: "read" })).revision, current.revision);
@@ -808,46 +656,28 @@ async function verifyLarkBindings() {
 test("package exposes the workflow and standalone route debugging stays inert", async () => {
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.ok(manifest.pi.extensions.includes("./extensions/gkd-workflow/index.ts"));
-  assert.deepEqual(manifest.pi.skills, [
-    "./extensions/gkd-workflow/gkd-pr",
-    "./extensions/lark-workloop",
-  ]);
-  assert.ok(manifest.pi.extensions.includes("./extensions/lark-workloop/index.ts"));
-  const larkDir = fileURLToPath(new URL("../extensions/lark-workloop/", import.meta.url));
-  const larkSkills = loadSkillsFromDir({ dir: larkDir, source: "path" });
-  assert.deepEqual(larkSkills.diagnostics, []);
-  assert.deepEqual(
-    larkSkills.skills.map((skill) => [skill.name, skill.filePath]),
-    [["lark-workloop", join(larkDir, "SKILL.md")]],
-  );
+  assert.deepEqual(manifest.pi.skills, ["./extensions/gkd-workflow/gkd-workloop"]);
+  assert.ok(!manifest.pi.extensions.includes("./extensions/lark-workloop/index.ts"));
+  const larkDir = fileURLToPath(new URL("../extensions/gkd-workflow/integrations/lark/", import.meta.url));
+  const mainDir = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-workloop/", import.meta.url));
+  const mainSkills = loadSkillsFromDir({ dir: mainDir, source: "path" });
+  assert.deepEqual(mainSkills.diagnostics, []);
+  assert.deepEqual(mainSkills.skills.map((skill) => skill.name), ["gkd-workloop"]);
   const larkSkill = await readFile(join(larkDir, "SKILL.md"), "utf8");
   const checkFlow = await readFile(join(larkDir, "references/check.md"), "utf8");
   const createFlow = await readFile(join(larkDir, "references/create.md"), "utf8");
-  assert.match(larkSkill, /命令前加 `\/lark-workloop`.*自然语言/);
+  const mainSkill = await readFile(join(mainDir, "SKILL.md"), "utf8");
+  assert.match(mainSkill, /check-lark/);
+  assert.match(mainSkill, /create-lark-table/);
+  assert.match(mainSkill, /gkd_workloop_start/);
+  assert.match(larkSkill, /不对外暴露/);
+  assert.match(createFlow, /create-lark-table/);
   assert.match(createFlow, /仅执行一次以下脚本/);
-  assert.match(createFlow, /必须且只能提供一个 Wiki 父页面 URL/);
-  assert.match(larkSkill, /创建成功后会尝试推断并记录项目关联/);
-  assert.match(createFlow, /建表成功后，加载.*bindings\.md.*当前主 Agent/);
-  assert.match(createFlow, /返回的 `baseToken`、`tableId`/);
-  assert.match(createFlow, /不把推断逻辑放进 `create\.ts`/);
-  assert.match(createFlow, /反馈首行为.*已创建漏洞跟踪记录/);
-  assert.match(createFlow, /绑定失败不改变建表成功的事实.*不重跑创建脚本/);
+  assert.match(createFlow, /绑定失败不改变建表成功的事实/);
   const workflow = await readFile(join(larkDir, "references/workflow.md"), "utf8");
-  assert.match(larkSkill, /确定操作前，不检查环境、读取授权缓存、访问飞书或业务项目，也不修改文件/);
-  assert.match(larkSkill, /未开始.*未完成.*已暂停/);
-  assert.match(larkSkill, /check.*references\/check\.md/);
+  assert.match(workflow, /每轮预算最多 5 点、最多 5 条/);
+  assert.match(workflow, /GKD 状态机的衔接/);
   assert.match(checkFlow, /--invalidate.*仅运行.*清缓存/);
-  assert.match(larkSkill, /串行执行/);
-  assert.match(checkFlow, /waiting_user/);
-  assert.match(larkSkill, /从未完成步骤恢复.*不重新执行已完成步骤/);
-  assert.match(checkFlow, /不读取问题表/);
-  assert.match(checkFlow, /返回调度计划/);
-  assert.match(larkSkill, /确定要做的事[\s\S]*读取对应说明[\s\S]*按说明执行/);
-  assert.match(larkSkill, /create <URL>.*references\/create\.md/);
-  assert.match(
-    larkSkill,
-    /work --larkurl <问题表URL> \[--workspace <工作区路径>\].*references\/workflow\.md/,
-  );
   const bindings = await readFile(join(larkDir, "references/bindings.md"), "utf8");
   assert.match(larkSkill, /管理项目关联.*references\/bindings\.md/);
   assert.match(larkSkill, /项目关联只管理本地关联，不启动修复或写入飞书/);
@@ -910,13 +740,10 @@ test("package exposes the workflow and standalone route debugging stays inert", 
   await verifyLarkCreate();
   await verifyLarkBindings();
   assert.ok(manifest.files.includes("extensions"));
-  const skillDir = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-pr/", import.meta.url));
+  const skillDir = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-workloop/", import.meta.url));
   const discovered = loadSkillsFromDir({ dir: skillDir, source: "path" });
   assert.deepEqual(discovered.diagnostics, []);
-  assert.deepEqual(
-    discovered.skills.map((skill) => [skill.name, skill.filePath]),
-    [["gkd-pr", join(skillDir, "SKILL.md")]],
-  );
+  assert.deepEqual(discovered.skills.map((skill) => skill.name), ["gkd-workloop"]);
   const app = router();
   assert.deepEqual([...app.commands.keys()], ["gkd-judge-route"]);
   assert.deepEqual(app.notifications, []);

@@ -101,6 +101,7 @@ function harness(cwd, options = {}) {
     signal: abortController.signal,
     model: { id: "test", provider: "test" },
     isIdle: () => !busy,
+    hasPendingMessages: () => false,
     isProjectTrusted: () => true,
     abort: () => abortController.abort(),
     sessionManager: {
@@ -161,7 +162,9 @@ function harness(cwd, options = {}) {
       confirm = value;
     },
     async start(standard = false) {
-      await commands.get("gkd").handler("Change the stored value to after", ctx);
+      await commands.get("gkd-workloop").handler("Change the stored value to after", ctx);
+      assert.equal(messages.at(-1), "/skill:gkd-workloop Change the stored value to after");
+      await invoke("gkd_workloop_start", { kind: "development" });
       assert.equal(state().phase, "ROUTING");
       await invoke("gkd_judge_route", { response: JSON.stringify(rawRoute(standard)) });
     },
@@ -178,12 +181,12 @@ function harness(cwd, options = {}) {
 
 test("loading is inert and only the three existing commands are registered", async () => {
   const app = harness(await project());
-  assert.deepEqual([...app.commands.keys()].sort(), ["gkd", "gkd-judge-route", "gkd-settings"]);
+  assert.deepEqual([...app.commands.keys()].sort(), ["gkd-judge-route", "gkd-settings", "gkd-workloop"]);
   assert.deepEqual([...app.shortcuts.keys()], ["super+shift+g"]);
   assert.deepEqual(app.activeTools(), originalTools);
   assert.equal(await app.event("tool_call", { toolName: "write", input: {} }), undefined);
   assert.equal(await app.event("before_agent_start", { systemPrompt: "ordinary" }), undefined);
-  await app.commands.get("gkd").handler("", app.ctx);
+  await app.commands.get("gkd-workloop").handler("", app.ctx);
   assert.equal(app.state(), undefined);
 });
 
@@ -359,7 +362,7 @@ test("only user cancellation ends the task, without undoing code or starting par
     app = harness(cwd);
   await app.start();
   const taskId = app.state().taskId;
-  await app.commands.get("gkd").handler("Another task", app.ctx);
+  await app.commands.get("gkd-workloop").handler("Another task", app.ctx);
   assert.equal(app.state().taskId, taskId);
   await writeFile(join(cwd, "value.txt"), "unfinished work");
   await app.input("取消当前任务", "extension");
@@ -443,7 +446,7 @@ test("global auto mode routes the original input without injecting a duplicate m
     "other sessions use the global off value",
   );
   await off.start();
-  assert.equal(off.state().phase, "IMPLEMENTING", "manual /gkd still works when off");
+  assert.equal(off.state().phase, "IMPLEMENTING", "manual /gkd-workloop still works when off");
 });
 
 test("auto mode leaves extension messages, slash commands, streaming and existing tasks alone", async (t) => {

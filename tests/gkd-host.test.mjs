@@ -190,7 +190,7 @@ test(
                 },
               ]
             : undefined;
-          await session.prompt(auto ? task : `/gkd ${task}`, { images });
+          await session.prompt(auto ? task : `/gkd-workloop ${task}`, { images });
           await started; // sendUserMessage starts asynchronously after the command returns.
           await session.waitForIdle();
           if (resume) {
