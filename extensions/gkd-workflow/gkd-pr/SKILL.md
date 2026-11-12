@@ -5,7 +5,7 @@ description: After GKD judge-route classifies development as FAST or STANDARD an
 
 # GKD PR / MR publishing
 
-Use the **validated route**, not a guess from the task text. FAST uses `references/FAST.md`; STANDARD uses `references/STANDARD.md`. Load only the corresponding template. Work occurs **after** implementation and attempted verification, never inside the read-only judge-route stage.
+Use the **evidence-backed route** selected through the gkd-workloop Skill, not a guess from the task text or an assumed plugin result. FAST uses `references/FAST.md`; STANDARD uses `references/STANDARD.md`. Load only the corresponding template. Work occurs **after** implementation and attempted verification, never inside the read-only judge-route stage.
 
 ## Determine eligibility
 

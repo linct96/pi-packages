@@ -16,11 +16,11 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
-import { createTracker } from "../extensions/gkd-workflow/integrations/lark/scripts/create.ts";
+import { createTracker } from "../skills/gkd-workloop/integrations/lark/scripts/create.ts";
 import {
   bindingsPath,
   manageBindings,
-} from "../extensions/gkd-workflow/integrations/lark/scripts/bindings.ts";
+} from "../skills/gkd-workloop/integrations/lark/scripts/bindings.ts";
 import {
   CACHE_TTL_MS,
   REQUIRED_SCOPES,
@@ -28,7 +28,7 @@ import {
   invalidatePreflightCache,
   preflightCachePath,
   readPreflightCache,
-} from "../extensions/gkd-workflow/integrations/lark/scripts/preflight.ts";
+} from "../skills/gkd-workloop/integrations/lark/scripts/preflight.ts";
 
 const exec = promisify(execFile);
 
@@ -94,7 +94,7 @@ test("Lark preflight checks permissions, cache expiry, revocation and secret-fre
   assert.equal(await readPreflightCache(), undefined);
   process.env.LARK_TEST_STATUS = JSON.stringify({ identities: { user } });
   const script = fileURLToPath(
-    new URL("../extensions/gkd-workflow/integrations/lark/scripts/preflight.ts", import.meta.url),
+    new URL("../skills/gkd-workloop/integrations/lark/scripts/preflight.ts", import.meta.url),
   );
   const checked = JSON.parse(
     (await exec(process.execPath, ["--experimental-strip-types", script, "--force"])).stdout,
@@ -172,7 +172,7 @@ test("Lark creation validates parents and stops safely after partial success or 
   const template = JSON.parse(
     await readFile(
       new URL(
-        "../extensions/gkd-workflow/integrations/lark/assets/issue-tracker.json",
+        "../skills/gkd-workloop/integrations/lark/assets/issue-tracker.json",
         import.meta.url,
       ),
       "utf8",
@@ -220,7 +220,7 @@ process.stdout.write(JSON.stringify({ok:true,identity:"user",data}));
   await assert.rejects(readFile(process.env.LARK_TEST_CALLS), { code: "ENOENT" });
   // Internal table creation has no standalone shortcut; preserve its script contract.
   const script = fileURLToPath(
-    new URL("../extensions/gkd-workflow/integrations/lark/scripts/create.ts", import.meta.url),
+    new URL("../skills/gkd-workloop/integrations/lark/scripts/create.ts", import.meta.url),
   );
   const result = JSON.parse(
     (await exec(process.execPath, ["--experimental-strip-types", script, parent])).stdout,
@@ -309,7 +309,7 @@ test("Lark bindings preserve confirmed associations and reject conflicts, corrup
   for (const project of ["apps/web", "apps/admin", "apps/moved"])
     await mkdir(join(workspace, project), { recursive: true });
   const script = fileURLToPath(
-    new URL("../extensions/gkd-workflow/integrations/lark/scripts/bindings.ts", import.meta.url),
+    new URL("../skills/gkd-workloop/integrations/lark/scripts/bindings.ts", import.meta.url),
   );
   const cli = (input) =>
     new Promise((resolve, reject) => {
@@ -494,7 +494,7 @@ test("Lark bindings preserve confirmed associations and reject conflicts, corrup
     /原绑定不存在/,
   );
   const preflight = fileURLToPath(
-    new URL("../extensions/gkd-workflow/integrations/lark/scripts/preflight.ts", import.meta.url),
+    new URL("../skills/gkd-workloop/integrations/lark/scripts/preflight.ts", import.meta.url),
   );
   await exec(process.execPath, ["--experimental-strip-types", preflight, "--invalidate"]);
   assert.equal((await manageBindings({ action: "read" })).revision, current.revision);

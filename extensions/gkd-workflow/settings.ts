@@ -93,7 +93,7 @@ export function createSettingsMenu(
         currentValue: value(options.autoEnabled),
         values: ["off", "on"],
         description:
-          "普通输入自动进入 GKD 分流；全局生效并立即保存。主输入区按 Cmd+Shift+G 切换，不影响当前任务或审批。",
+          "普通输入自动加载 GKD Skill；全局生效并立即保存。主输入区按 Cmd+Shift+G 切换，不代替用户审批或恢复任务。",
       },
     ],
     1,

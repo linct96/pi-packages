@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
 import { preflightCachePath } from "./preflight.ts";
 
 type Binding = {
@@ -244,7 +243,7 @@ async function main() {
   console.log(JSON.stringify(await manageBindings(request)));
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+if (import.meta.main) {
   main().catch((error) => {
     console.error(
       JSON.stringify({

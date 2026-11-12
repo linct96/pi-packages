@@ -1,8 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerSettings } from "./settings.ts";
-import { registerWorkflow } from "./workflow.ts";
+import { registerWorkloopCommand } from "./command.ts";
+import { registerWorkloopAuto } from "./auto.ts";
 
 export default function (pi: ExtensionAPI) {
   const autoEnabled = registerSettings(pi);
-  registerWorkflow(pi, autoEnabled);
+  registerWorkloopCommand(pi);
+  registerWorkloopAuto(pi, autoEnabled);
 }

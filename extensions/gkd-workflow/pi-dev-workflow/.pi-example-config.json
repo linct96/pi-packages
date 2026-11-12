@@ -1,8 +1,0 @@
-{
-  "validators": [
-    "npm run typecheck",
-    "npm test -- --runInBand",
-    "npm run build"
-  ],
-  "validationTimeoutMs": 120000
-}

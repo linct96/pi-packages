@@ -1,7 +1,5 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 type ObjectValue = Record<string, unknown>;
@@ -94,7 +92,7 @@ export async function createTracker(
       throw new Error(
         `lark-cli 调用失败或超时${typeof detail.code === "number" ? `（${detail.code}）` : ""}。` +
           (scopes.length
-            ? `缺少权限：${scopes.join(" ")}；请按 lark-shared 补充用户授权。`
+            ? `缺少权限：${scopes.join(" ")}；请按宿主已有 lark-shared 或 lark-cli 授权帮助补充用户授权。`
             : "请检查用户授权、资源访问权限与网络。") +
           (failure.code === 10 ? "高风险确认门禁未通过，未自动追加 --yes。" : ""),
       );
@@ -246,7 +244,7 @@ async function main() {
   console.log(JSON.stringify(await createTracker(args[0])));
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+if (import.meta.main) {
   main().catch((error: unknown) => {
     console.error(
       JSON.stringify({

@@ -9,6 +9,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["extensions/**/*.ts"],
+  "include": ["extensions/**/*.ts", "skills/**/*.ts"],
   "exclude": ["extensions/gkd-workflow/pi-dev-workflow"]
 }

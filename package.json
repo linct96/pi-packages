@@ -10,7 +10,8 @@
     "pi-package"
   ],
   "files": [
-    "extensions"
+    "extensions",
+    "skills"
   ],
   "engines": {
     "node": ">=22.19.0"
@@ -20,7 +21,7 @@
     "format:check": "oxfmt --check .",
     "lint": "oxlint --deny-warnings .",
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.mjs extensions/gkd-workflow/pi-dev-workflow/test/*.test.mjs"
+    "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "pi": {
     "extensions": [
@@ -30,7 +31,7 @@
       "./extensions/gkd-workflow/index.ts"
     ],
     "skills": [
-      "./extensions/gkd-workflow/gkd-workloop"
+      "./skills/gkd-workloop"
     ]
   },
   "peerDependencies": {

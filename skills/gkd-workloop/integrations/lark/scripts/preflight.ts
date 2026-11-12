@@ -2,8 +2,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 export const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -32,7 +31,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// 与 Pi 个人数据目录保持一致，不在业务仓库保存授权检查记录。
+// 保留历史数据目录以兼容已有缓存；独立 Skill 不依赖 Pi 运行时。
 export function preflightCachePath() {
   return join(
     process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"),
@@ -99,7 +98,7 @@ function needsAuth(missingScopes = [...REQUIRED_SCOPES]): PreflightResult {
   return {
     status: "needs-auth",
     message:
-      "lark-cli 用户授权未就绪或缺少基础权限。请按 lark-shared 完成必要的应用配置和用户授权，再强制复检；不能使用 bot 身份代替。",
+      "lark-cli 用户授权未就绪或缺少基础权限。请按宿主已有 lark-shared 或 lark-cli 授权帮助完成必要的应用配置和用户授权，再强制复检；不能使用 bot 身份代替。",
     missingScopes,
   };
 }
@@ -128,7 +127,7 @@ export async function checkLarkCli(force = false): Promise<PreflightResult> {
       return {
         status: "missing-cli",
         message:
-          "未检测到 lark-cli，请先按官方文档安装并确保命令位于 PATH：https://github.com/larksuite/cli 。安装后重新调用 /gkd-workloop check-lark；插件不会自动安装。",
+          "未检测到 lark-cli，请先按官方文档安装并确保命令位于 PATH：https://github.com/larksuite/cli 。安装后重新请求检查飞书授权；Skill 不会自动安装。",
       };
     }
     if (isRecord(error) && error.code === 3) return needsAuth();
@@ -179,7 +178,7 @@ async function main() {
   if (result.status !== "ready") process.exitCode = 1;
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+if (import.meta.main) {
   main().catch(() => {
     console.error(
       JSON.stringify({

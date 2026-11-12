@@ -1,11 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { deferWorkloopForProbe } from "../codex-settings/model-probe/index.ts";
 
 /** Keep the slash command free of business logic; the main Skill performs semantic routing. */
-export function registerWorkloopCommand(
-  pi: ExtensionAPI,
-  prepare: (input: string, ctx: ExtensionContext) => false | void | (() => void) = () => {},
-) {
+export function registerWorkloopCommand(pi: ExtensionAPI) {
   pi.registerCommand("gkd-workloop", {
     description: "统一工作流：开发任务、飞书问题表、check-lark、create-lark-table；支持自然语言",
     handler: async (args, ctx) => {
@@ -29,14 +26,7 @@ export function registerWorkloopCommand(
         return;
       }
       if (deferWorkloopForProbe(`/gkd-workloop ${input}`, ctx)) return;
-      let rollback: (() => void) | undefined;
       try {
-        const result = prepare(input, ctx);
-        if (result === false) {
-          ctx.ui.notify("已有 GKD 任务尚未结束；请先恢复或取消当前任务。", "warning");
-          return;
-        }
-        rollback = typeof result === "function" ? result : undefined;
         pi.sendMessage(
           {
             customType: "gkd-workloop-context",
@@ -50,7 +40,6 @@ export function registerWorkloopCommand(
           deliverAs: "followUp",
         });
       } catch {
-        rollback?.();
         pi.sendMessage(
           {
             customType: "gkd-workloop",

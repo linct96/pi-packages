@@ -40,7 +40,7 @@
 
 ## 本地脚本协议
 
-使用 Node.js >= 22.19.0。通过 stdin 传 JSON，不将问题正文拼进 shell，不直接用 edit/write 覆盖绑定文件。以下 `<skill-dir>` 是技能真实目录：
+使用 Node.js >= 22.19.0。通过 stdin 传 JSON，不将问题正文拼进 shell，不直接用 edit/write 覆盖绑定文件。以下 `<skill-dir>` 是本 Skill 内 `integrations/lark` 的真实目录：
 
 ```bash
 node --experimental-strip-types "<skill-dir>/scripts/bindings.ts" <<'JSON'
