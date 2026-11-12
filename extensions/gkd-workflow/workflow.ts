@@ -8,7 +8,7 @@ import {
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { registerWorkloopCommand } from "./command.ts";
-import { registerJudgeRoute } from "./judge-route/index.ts";
+import { registerJudgeRoute, ROUTE_POLICY } from "./judge-route/index.ts";
 import {
   loadState,
   reportTextSchema,
@@ -21,6 +21,7 @@ import {
 } from "./state.ts";
 
 const INSTRUCTIONS = readFileSync(new URL("./workflow.md", import.meta.url), "utf8").trim();
+const ROUTE_GUIDE = readFileSync(new URL("./judge-route/workflow.md", import.meta.url), "utf8").trim();
 const LARK_GUIDE = readFileSync(
   new URL("./integrations/lark/gkd.md", import.meta.url),
   "utf8",
@@ -296,15 +297,15 @@ export function registerWorkflow(
         ? `用户请求：${request}\n\n已读取且限定范围的飞书任务：\n${args.details}`
         : request;
       bridgeHandoff = true;
-      start(task, ctx, undefined, { allowActiveRun: true, origin: isLark ? "lark" : undefined });
+      start(task, ctx, task, { allowActiveRun: true, origin: isLark ? "lark" : undefined });
       if (!running(ctx)) {
         bridgeHandoff = false;
         throw new Error("Unable to start GKD development workflow");
       }
+      bridgeHandoff = false;
       return {
-        content: [{ type: "text", text: "GKD routing started in this session." }],
+        content: [{ type: "text", text: `GKD ROUTING is active. Only gkd_route_evidence and gkd_judge_route are authorized. Classify the current task using the following policy and report the exact JSON through gkd_judge_route. Do not modify code during ROUTING.\n\n${ROUTE_POLICY}\n\n${ROUTE_GUIDE}` }],
         details: { started: true },
-        terminate: true,
       };
     },
   });

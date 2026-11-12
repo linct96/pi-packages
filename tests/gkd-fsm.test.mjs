@@ -165,7 +165,6 @@ function harness(cwd, options = {}) {
       await commands.get("gkd-workloop").handler("Change the stored value to after", ctx);
       assert.equal(messages.at(-1), "/skill:gkd-workloop Change the stored value to after");
       await invoke("gkd_workloop_start", { kind: "development" });
-      await event("agent_settled", { aborted: false });
       assert.equal(state().phase, "ROUTING");
       await invoke("gkd_judge_route", { response: JSON.stringify(rawRoute(standard)) });
     },

@@ -113,9 +113,9 @@ test(
             : []),
           (context) => {
             assert.match(
-              JSON.stringify(context.messages.filter((message) => message.role === "system")),
+              JSON.stringify(context.messages),
               /Task Route Policy/,
-              "routing policy reaches the real provider request",
+              "routing policy reaches the real provider request or tool-result context",
             );
             return fauxAssistantMessage(
               fauxToolCall("gkd_judge_route", {
