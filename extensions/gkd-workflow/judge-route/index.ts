@@ -562,6 +562,7 @@ export function registerJudgeRoute(
         completed: boolean;
         controller: AbortController;
         receiver?: RouteReceiver;
+        handoffQueued?: boolean;
       }
     | undefined;
   function restoreTools() {
@@ -578,6 +579,10 @@ export function registerJudgeRoute(
 
   pi.on("session_shutdown", restoreTools);
   pi.on("agent_settled", (_event, ctx) => {
+    if (active?.handoffQueued) {
+      active.handoffQueued = false;
+      return;
+    }
     if (active && !active.completed)
       ctx.ui.notify("分流调试已结束，未生成有效分类结果。", "warning");
     restoreTools();
@@ -755,6 +760,7 @@ export function registerJudgeRoute(
       completed: false,
       controller: new AbortController(),
       receiver,
+      handoffQueued: queueWhenBusy,
     };
     pi.setActiveTools([EVIDENCE_TOOL, RESULT_TOOL]);
     if (inlinePrompt === undefined)

@@ -36,7 +36,10 @@ export function registerWorkloopCommand(
           },
           { triggerTurn: false },
         );
-        pi.sendUserMessage(`/skill:gkd-workloop ${input}`, { expandPromptTemplates: true });
+        pi.sendUserMessage(`/skill:gkd-workloop ${input}`, {
+          expandPromptTemplates: true,
+          streamingBehavior: "followUp",
+        });
       } catch {
         rollback?.();
         pi.sendMessage(

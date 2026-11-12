@@ -181,7 +181,6 @@ async function verifyLarkPreflight() {
     });
     assert.equal((await checkLarkCli()).status, "needs-auth");
     assert.equal(await readPreflightCache(), undefined);
-    sent.length = 0;
     process.env.LARK_TEST_STATUS = JSON.stringify({
       identities: { user: { ...user, scope: "base:record:read" } },
     });

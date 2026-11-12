@@ -201,7 +201,7 @@ export function registerWorkflow(
     options: { allowActiveRun?: boolean; origin?: "lark" } = {},
   ) {
     if (!task || task.length > 16000) {
-      ctx.ui.notify("用法：/gkd <任务>（最多 16000 字符）", "warning");
+      ctx.ui.notify("用法：/gkd-workloop <任务>（最多 16000 字符）", "warning");
       return;
     }
     if (
