@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync, unlinkSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   truncateHead,
   type ExtensionAPI,
@@ -28,11 +29,37 @@ const ROUTE_GUIDE = readFileSync(
 const LARK_GUIDE = readFileSync(
   new URL("./integrations/lark/gkd.md", import.meta.url),
   "utf8",
+)
+  .trim()
+  .replace(
+    "integrations/lark/references/workflow.md",
+    fileURLToPath(new URL("./integrations/lark/references/workflow.md", import.meta.url)),
+  );
+const WORKLOOP_GUIDE = readFileSync(
+  new URL("./gkd-workloop/SKILL.md", import.meta.url),
+  "utf8",
 ).trim();
 const ENTRY = "gkd-task";
 const REPORT = "gkd_report";
 const EVIDENCE = "gkd_route_evidence";
 const START = "gkd_workloop_start";
+const WAIT = "gkd_workloop_wait";
+const REQUEST_ENTRY = "gkd-workloop-request";
+type WorkloopRequest = {
+  sessionId: string;
+  cwd: string;
+  request: string;
+  phase: "ready" | "waiting";
+  updatedAt: number;
+};
+const waitSchema = Type.Object(
+  { reason: Type.Union([
+    Type.Literal("missing-parameter"),
+    Type.Literal("lark-auth"),
+    Type.Literal("clarification"),
+  ]) },
+  { additionalProperties: false },
+);
 const startSchema = Type.Union([
   Type.Object({ kind: Type.Literal("development") }, { additionalProperties: false }),
   Type.Object(
@@ -80,8 +107,29 @@ export function registerWorkflow(
   let promptController = new AbortController();
   let nudged = false;
   let draining = false;
-  let bridgeHandoff = false;
-  let pending: { sessionId: string; cwd: string; request: string } | undefined;
+  let pending: WorkloopRequest | undefined;
+  function safeTools(tools: string[]) {
+    return tools.filter((name) => ![START, WAIT, REPORT, EVIDENCE, "gkd_judge_route"].includes(name));
+  }
+  function exposeWorkloop() {
+    pi.setActiveTools([...new Set([...pi.getActiveTools(), START, WAIT])]);
+  }
+  function clearPending(persist = false) {
+    if (persist && pending) pi.appendEntry(REQUEST_ENTRY, { phase: "cleared" });
+    pending = undefined;
+    if (!engaged)
+      pi.setActiveTools(pi.getActiveTools().filter((tool) => ![START, WAIT].includes(tool)));
+  }
+  function prepareRequest(request: string, ctx: ExtensionContext) {
+    pending = {
+      sessionId: ctx.sessionManager.getSessionId(),
+      cwd: realpathSync(ctx.cwd),
+      request,
+      phase: "ready",
+      updatedAt: Date.now(),
+    };
+    exposeWorkloop();
+  }
   const owns = (ctx: ExtensionContext) =>
     !!state && state.sessionId === ctx.sessionManager.getSessionId();
   const running = (ctx: ExtensionContext) => engaged && owns(ctx);
@@ -183,7 +231,7 @@ export function registerWorkflow(
     return "\n" + describe();
   }
   function startRouting(ctx: ExtensionContext, inlinePrompt?: string) {
-    router.start(state!.task, ctx, routed, inlinePrompt, bridgeHandoff);
+    router.start(state!.task, ctx, routed, inlinePrompt);
     status(ctx);
   }
   function approve(ctx: ExtensionContext, taskId: string, version: number) {
@@ -203,10 +251,10 @@ export function registerWorkflow(
     ctx: ExtensionContext,
     inlinePrompt?: string,
     options: { allowActiveRun?: boolean; origin?: "lark" } = {},
-  ) {
+  ): boolean {
     if (!task || task.length > 16000) {
       ctx.ui.notify("用法：/gkd-workloop <任务>（最多 16000 字符）", "warning");
-      return;
+      return false;
     }
     if (
       (!options.allowActiveRun && !ctx.isIdle()) ||
@@ -214,17 +262,17 @@ export function registerWorkflow(
       (state && !terminal(state.phase))
     ) {
       ctx.ui.notify("已有任务尚未结束；可以说“继续上次任务”或“取消当前任务”。", "warning");
-      return;
+      return false;
     }
     if (!ctx.model || !ctx.isProjectTrusted()) {
       ctx.ui.notify("GKD 需要可用模型和可信项目。", "error");
-      return;
+      return false;
     }
     try {
       const cwd = realpathSync(ctx.cwd);
       originalTools = pi
         .getActiveTools()
-        .filter((name) => ![REPORT, EVIDENCE, "gkd_judge_route"].includes(name));
+        .filter((name) => ![START, WAIT, REPORT, EVIDENCE, "gkd_judge_route"].includes(name));
       commit(
         {
           version: 2,
@@ -253,33 +301,47 @@ export function registerWorkflow(
       fault = false;
       promptController = new AbortController();
       startRouting(ctx, inlinePrompt);
+      return running(ctx);
     } catch (error) {
       if (state && !fault) pause(ctx, String(error));
       else release(ctx);
       ctx.ui.notify(`无法启动 GKD：${String(error)}`, "error");
+      return false;
     }
   }
 
   registerWorkloopCommand(pi, (request, ctx) => {
     if (router.isActive() || (state && !terminal(state.phase))) return false;
-    pending = {
-      sessionId: ctx.sessionManager.getSessionId(),
-      cwd: realpathSync(ctx.cwd),
-      request,
-    };
-    return () => {
-      pending = undefined;
-    };
+    prepareRequest(request, ctx);
+    return () => clearPending();
   });
 
-  // A Skill can classify natural-language requests without starting the development FSM.
-  // This guarded bridge is only usable during the explicitly requested Skill turn.
+  pi.registerTool({
+    name: WAIT,
+    label: "等待 Workloop 参数或飞书授权",
+    description: "Only for the current user-authorized /gkd-workloop request. Call before asking for missing details, clarification or Feishu authorization; preserves context across turns without starting a development task.",
+    exposure: "model-only",
+    defaultActive: false,
+    executionMode: "sequential",
+    parameters: waitSchema,
+    async execute(_id, args, signal, _update, ctx) {
+      signal?.throwIfAborted();
+      if (!Value.Check(waitSchema, args) || !pending || pending.sessionId !== ctx.sessionManager.getSessionId())
+        throw new Error("No current Workloop request to wait for");
+      pending = { ...pending, phase: "waiting", updatedAt: Date.now() };
+      pi.appendEntry(REQUEST_ENTRY, pending);
+      return {
+        content: [{ type: "text", text: "Workloop request saved. Ask the user, then resume from this request on the next turn." }],
+        details: { phase: pending.phase, reason: args.reason },
+      };
+    },
+  });
+
   pi.registerTool({
     name: START,
     label: "启动 GKD 开发流程",
-    description:
-      "Only the /gkd-workloop Skill may call this for an explicit development request. Use kind=development for ordinary code tasks, or kind=lark-work with an already-read, bounded list of authorized Lark records. Never call for checks, table creation, explanations or previews.",
-    defaultActive: true,
+    description: "Only for an explicit current user development request selected by gkd-workloop. Use kind=development for code tasks, kind=lark-work only after a read-only bounded authorized Lark scan. Never for check-lark, create-lark-table, consultation or preview.",
+    defaultActive: false,
     exposure: "model-only",
     executionMode: "sequential",
     parameters: startSchema,
@@ -294,18 +356,15 @@ export function registerWorkflow(
       )
         throw new Error("GKD Skill request is no longer active");
       const request = pending.request;
-      pending = undefined;
       const isLark = args.kind === "lark-work";
       const task = isLark
         ? `用户请求：${request}\n\n已读取且限定范围的飞书任务：\n${args.details}`
         : request;
-      bridgeHandoff = true;
-      start(task, ctx, task, { allowActiveRun: true, origin: isLark ? "lark" : undefined });
-      if (!running(ctx)) {
-        bridgeHandoff = false;
-        throw new Error("Unable to start GKD development workflow");
-      }
-      bridgeHandoff = false;
+      if (task.length > 16000)
+        throw new Error("GKD task exceeds 16000 characters; shorten details or ask for clarification. Request remains available.");
+      if (!start(task, ctx, task, { allowActiveRun: true, origin: isLark ? "lark" : undefined }))
+        throw new Error("Unable to start GKD development workflow; request remains available");
+      clearPending(true);
       return {
         content: [
           {
