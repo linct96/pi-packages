@@ -32,6 +32,7 @@ jobs:
           install: false
 
       - name: Install dependencies
+        id: deps
         run: pnpm install --frozen-lockfile
 
       - name: Check formatting
@@ -44,4 +45,5 @@ jobs:
         run: pnpm check
 
       - name: Test
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         run: pnpm test
