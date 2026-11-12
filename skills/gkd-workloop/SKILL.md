@@ -1,6 +1,6 @@
 ---
 name: gkd-workloop
-description: 在用户明确要求执行开发任务或操作飞书问题表时使用。支持修复 Bug、实现功能、处理飞书问题表、检查飞书授权、创建问题表及管理问题表与项目的关联。仅要求解释、讨论方案、代码评审或预览时不启动执行。
+description: 在用户明确要求执行开发任务或飞书/Lark 问题表操作时使用，支持 Bug 修复、功能开发、飞书授权检查、问题表创建和项目绑定。飞书分支必须有明确来源（飞书/Lark 描述、可核实的资源链接或 check-lark/create-lark-table 命令）；普通“文档、表格、Wiki”或通用路径不触发，也不接管普通云文档读写。解释、咨询、评审和预览不启动执行。
 ---
 
 # GKD Workloop
@@ -14,11 +14,13 @@ description: 在用户明确要求执行开发任务或操作飞书问题表时�
 | 用户请求 | 执行入口 |
 | --- | --- |
 | 修复 Bug、实现功能、修改或重构代码 | [开发流程](references/development.md) |
-| 处理飞书问题表 URL，或直接发送可识别的问题表 URL | [飞书问题处理](integrations/lark/references/workflow.md) |
+| 处理飞书/Lark 问题表，或提供可核实的飞书/Lark 问题表链接 | [飞书问题处理](integrations/lark/references/workflow.md) |
 | `check-lark`、检查飞书登录或授权 | [授权检查](integrations/lark/references/check.md) |
 | `create-lark-table <Wiki 父页面 URL>`、创建问题表 | [创建问题表](integrations/lark/references/create.md) |
 | 查看、修改或移除问题表与项目的关联 | [项目关联](integrations/lark/references/bindings.md) |
 
+- **确认飞书来源**：须明确提及“飞书”或“Lark”（不区分大小写）、提供可核实的飞书/Lark 资源链接，或使用 `check-lark` / `create-lark-table` 专用命令。仅出现“文档”“云文档”“表格”“多维表格”“Wiki”或通用 `/wiki/`、`/docx/` 路径，不足以触发飞书分支；来源不明且影响执行时先询问，不加载飞书资源或检查授权。
+- **确认执行意图**：飞书来源不等于执行授权。普通飞书/Lark 云文档读写交给文档能力；仅咨询、解释或本地开发不进入飞书分支。只提供可确认的问题表链接时默认处理现有问题表；创建问题表必须有明确的创建意图。
 - 用户只输入 `/gkd-workloop`：说明可用命令及参数，结束。不要检查环境。
 - 用户只要求解释、方案讨论、评审或预览：直接回答，不修改文件或飞书数据。
 - 用户明确要求多项操作：按指定顺序逐项执行。某项失败或需要确认时，暂停后续操作。
