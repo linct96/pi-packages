@@ -1602,3 +1602,23 @@ test(
     assert.deepEqual(h.errors, []);
   },
 );
+test(
+  "first /gkd-workloop command is held by Model Probe and replayed once after success",
+  { timeout: 20000 },
+  async (t) => {
+    const h = await sdk(t, {
+      gkd: true,
+      persisted: true,
+      responses: [fauxAssistantMessage("ABC"), fauxAssistantMessage("check reported")],
+    });
+    await h.runtime.session.prompt("/gkd-workloop check-lark");
+    await h.runtime.session.waitForIdle();
+    const state = stateOf(h.runtime.session.sessionManager);
+    assert.equal(state.phase, "READY", JSON.stringify(h.errors));
+    assert.equal(state.pendingMessage.text, "/gkd-workloop check-lark");
+    assert.equal(state.pendingMessage.delivery, "delivered");
+    assert.equal(h.faux.state.callCount, 2, "one probe turn and one resumed request");
+    assert.deepEqual(h.errors, []);
+  },
+);
+
