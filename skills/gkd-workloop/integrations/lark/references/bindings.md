@@ -83,7 +83,7 @@ JSON
 用户明确指出要删除的关联后，先 read，再发送：
 
 ```json
-{"action":"remove","id":"<明确选中的关联 id>","expectedRevision":"<本次 revision>"}
+{ "action": "remove", "id": "<明确选中的关联 id>", "expectedRevision": "<本次 revision>" }
 ```
 
 只删除目标 `id`，保留同表其他关联。已失效的旧目录也可以明确移除，无需访问旧目录；成功状态为 `removed`。仅要求查看或预览时只 read，不保存也不删除。

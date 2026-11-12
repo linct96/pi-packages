@@ -18,7 +18,7 @@
   },
   "scripts": {
     "format": "oxfmt --write .",
-    "format:check": "oxfmt --write skills/gkd-workloop/integrations/lark/references/bindings.md skills/gkd-workloop/integrations/lark/references/workflow.md && git --no-pager diff -- skills/gkd-workloop/integrations/lark/references/bindings.md skills/gkd-workloop/integrations/lark/references/workflow.md && exit 1",
+    "format:check": "oxfmt --check .",
     "lint": "oxlint --deny-warnings .",
     "check": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.mjs"
