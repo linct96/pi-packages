@@ -1,41 +1,20 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs/promises');
-const { mkdtempSync } = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const Module = require('node:module');
-const ts = require('typescript');
-const root = path.resolve(__dirname, '..');
-const tmp = mkdtempSync(path.join(os.tmpdir(), 'pi-dev-workflow-test-'));
-process.env.PI_CODING_AGENT_DIR = path.join(tmp, 'user-agent');
+import test, { after } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { isActionableDevelopmentRequest } from "../extensions/intent.ts";
+import { readSettings, settingsPath } from "../extensions/settings.ts";
+import devWorkflow from "../extensions/dev-workflow.ts";
 
-function requireTs(filename) {
-  const modulePath = path.resolve(filename);
-  const transpiled = ts.transpileModule(require('node:fs').readFileSync(modulePath, 'utf8'), {
-    fileName: modulePath,
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
-  }).outputText;
-  const item = new Module(modulePath, module);
-  item.filename = modulePath;
-  item.paths = module.paths;
-  const baseRequire = item.require.bind(item);
-  item.require = (name) => {
-    if (name === '@earendil-works/pi-coding-agent') return { CONFIG_DIR_NAME: '.pi' };
-    if (name === 'typebox') {
-      const typ = (name, arg) => ({ name, arg });
-      return { Type: { Object: (x) => typ('Object', x), String: (x) => typ('String', x), Literal: (x) => typ('Literal', x), Optional: (x) => typ('Optional', x), Union: (x) => typ('Union', x) } };
-    }
-    if (name.startsWith('.') && name.endsWith('.ts')) return requireTs(path.resolve(path.dirname(modulePath), name));
-    return baseRequire(name);
-  };
-  item._compile(transpiled, modulePath);
-  return item.exports;
-}
-
-const { isActionableDevelopmentRequest } = requireTs(path.join(root, 'extensions/intent.ts'));
-const { readSettings, settingsPath } = requireTs(path.join(root, 'extensions/settings.ts'));
-const devWorkflow = requireTs(path.join(root, 'extensions/dev-workflow.ts')).default;
+const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dev-workflow-test-"));
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+process.env.PI_CODING_AGENT_DIR = path.join(tmp, "user-agent");
+after(async () => {
+  if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  await fs.rm(tmp, { recursive: true, force: true });
+});
 
 function fixture(name='repo') {
   const cwd = path.join(tmp, name + '-' + Math.random().toString(36).slice(2));

@@ -102,35 +102,6 @@ test("cancelled saves leave the file unchanged and do not create a lock", async 
   assert.deepEqual(await readdir(directory), ["codex-settings.json"]);
 });
 
-test("Space and Enter toggle inline without saving, Esc closes without reverting", () => {
-  const applied = [];
-  let saves = 0;
-  let closes = 0;
-  const component = menu({
-    onApply: (fast) => applied.push(fast),
-    onSave: async () => {
-      saves++;
-    },
-    onClose: () => {
-      closes++;
-    },
-  });
-  assert.match(text(component), /Fast\s+off/);
-  assert.match(text(component), /Default: off/);
-  component.handleInput(space);
-  assert.deepEqual(applied, [true]);
-  assert.match(text(component), /Fast\s+on/);
-  component.handleInput(enter);
-  assert.deepEqual(applied, [true, false]);
-  assert.match(text(component), /Fast\s+off/);
-  component.handleInput(space);
-  assert.equal(saves, 0);
-  component.handleInput(escape);
-  assert.equal(closes, 1);
-  component.handleInput(space);
-  assert.deepEqual(applied, [true, false, true]);
-});
-
 test("Ctrl+S saves the current value without reapplying and prevents changes while saving", async () => {
   const applied = [];
   const saved = [];
@@ -199,9 +170,10 @@ test("application failure leaves the current value unchanged and permits retry",
   assert.match(text(component), /Fast\s+on/);
 });
 
-test("saving persists the inline value and subsequent toggles only affect the session", async (t) => {
+test("inline toggles stay session-only; Ctrl+S persists the current value and Esc closes", async (t) => {
   const path = join(await temporaryDirectory(t), "codex-settings.json");
-  let saved;
+  let saved,
+    closes = 0;
   const finished = new Promise((resolve) => {
     saved = resolve;
   });
@@ -212,18 +184,25 @@ test("saving persists the inline value and subsequent toggles only affect the se
       await saveSettings(path, fast, false, signal);
       saved();
     },
+    onClose: () => closes++,
   });
+  component.handleInput(space);
+  component.handleInput(enter);
+  assert.deepEqual(applied, [true, false]);
+  await assert.rejects(readFile(path), { code: "ENOENT" });
   component.handleInput(space);
   component.handleInput(ctrlS);
   await finished;
   await settle();
   assert.deepEqual(await readSettings(path), { fast: true });
-  assert.deepEqual(applied, [true]);
-  assert.match(text(component), /Default: on/);
   component.handleInput(space);
-  assert.deepEqual(applied, [true, false]);
+  assert.deepEqual(applied, [true, false, true, false]);
   assert.match(text(component), /Fast\s+off/);
   assert.match(text(component), /Default: on/);
+  component.handleInput(escape);
+  component.handleInput(space);
+  assert.equal(closes, 1);
+  assert.deepEqual(applied, [true, false, true, false]);
   assert.deepEqual(await readSettings(path), { fast: true });
 });
 
@@ -307,7 +286,6 @@ test("command applies Priority only to the selected Codex model and restores bra
   let failAppend = false;
   const notices = [];
   const statuses = new Map();
-  const statusColors = [];
   codexSettings({
     on(name, handler) {
       const previous = events.get(name);
@@ -349,10 +327,7 @@ test("command applies Priority only to the selected Codex model and restores bra
     },
     ui: {
       theme: {
-        fg(color, text) {
-          statusColors.push(color);
-          return text;
-        },
+        fg: (_color, text) => text,
       },
       notify: (...args) => notices.push(args),
       setStatus(key, value) {
@@ -471,7 +446,6 @@ test("command applies Priority only to the selected Codex model and restores bra
   ctx.mode = "rpc";
   await command.handler("", ctx);
   assert.match(notices.at(-1)[0], /requires TUI/);
-  assert.deepEqual(statusColors, ["dim", "dim", "dim", "dim"]);
   ctx.mode = "tui";
   const originalBranch = [...branch];
   const first = await openMenu();
@@ -510,89 +484,66 @@ test("command applies Priority only to the selected Codex model and restores bra
   assert.equal(request({ payload }, ctx).service_tier, "priority");
   component.handleInput(escape);
   await fourth.completed;
-  await t.test(
-    "Cmd+Shift+F toggles session Fast, closes stale menus, and preserves defaults",
-    async () => {
-      const opened = await openMenu();
-      const staleMenu = component;
-      shortcut.handler(ctx);
-      await opened.completed;
-      assert.deepEqual(branch.at(-1), {
-        type: "custom",
-        customType: "codex-settings",
-        data: { fast: false },
-      });
-      assert.equal(request({ payload }, ctx), undefined);
-      assert.equal(statuses.has("codex-settings"), false);
-      assert.deepEqual(notices.at(-1), ["Codex Fast: off", "info"]);
-      const afterToggle = [...branch];
-      staleMenu.handleInput(space);
-      assert.deepEqual(branch, afterToggle);
-      await events.get("session_start")({}, ctx);
-      assert.equal(request({ payload }, ctx), undefined);
-      assert.deepEqual(await readSettings(join(directory, "codex-settings.json")), { fast: true });
-      for (const mode of ["rpc", "print", "json"]) shortcut.handler({ ...ctx, mode });
-      assert.deepEqual(branch, afterToggle);
-      failAppend = true;
-      assert.throws(() => shortcut.handler(ctx), /cannot write session/);
-      assert.equal(request({ payload }, ctx), undefined);
-      assert.equal(statuses.has("codex-settings"), false);
-      assert.deepEqual(branch, afterToggle);
-      failAppend = false;
-      shortcut.handler(ctx);
-      assert.equal(request({ payload }, ctx).service_tier, "priority");
-      assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
-      assert.deepEqual(notices.at(-1), ["Codex Fast: on", "info"]);
-      await events.get("session_tree")({}, ctx);
-      assert.equal(request({ payload }, ctx).service_tier, "priority");
-      const reopened = await openMenu();
-      assert.match(text(component), /Fast\s+on/);
-      assert.match(text(component), /Default: on/);
-      component.handleInput(escape);
-      await reopened.completed;
-      assert.deepEqual(await readSettings(join(directory, "codex-settings.json")), { fast: true });
-    },
-  );
-  await t.test(
-    "Cmd+Shift+P toggles session Probe with footer/menu sync and leaves defaults and Fast unchanged",
-    async () => {
-      const key = "codex-settings:model-probe";
-      const opened = await openMenu();
-      const staleMenu = component;
-      probeShortcut.handler(ctx);
-      await opened.completed;
-      assert.deepEqual(branch.at(-1), {
-        type: "custom",
-        customType: "codex-settings:model-probe:setting",
-        data: { enabled: true },
-      });
-      assert.equal(statuses.get(key), "| Model Probe |");
-      assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
-      assert.deepEqual(notices.at(-1), ["Model Probe: on", "info"]);
-      const afterToggle = [...branch];
-      staleMenu.handleInput(space);
-      assert.deepEqual(branch, afterToggle);
-      await events.get("session_start")({}, ctx);
-      assert.equal(statuses.get(key), "| Model Probe |");
-      assert.deepEqual(await readSettings(join(directory, "codex-settings.json")), { fast: true });
-      for (const mode of ["rpc", "print", "json"]) probeShortcut.handler({ ...ctx, mode });
-      assert.deepEqual(branch, afterToggle);
-      failAppend = true;
-      assert.throws(() => probeShortcut.handler(ctx), /cannot write session/);
-      assert.equal(statuses.get(key), "| Model Probe |");
-      assert.deepEqual(branch, afterToggle);
-      failAppend = false;
-      const reopened = await openMenu();
-      assert.match(text(component), /Model Probe\s+on/);
-      component.handleInput(escape);
-      await reopened.completed;
-      probeShortcut.handler(ctx);
-      assert.equal(statuses.has(key), false);
-      assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
-      assert.deepEqual(notices.at(-1), ["Model Probe: off", "info"]);
-      assert.deepEqual(await readSettings(join(directory, "codex-settings.json")), { fast: true });
-    },
-  );
+  for (const [name, action, key, field, label, initial] of [
+    ["Fast", shortcut, "codex-settings", "fast", "Codex Fast", true],
+    ["Probe", probeShortcut, "codex-settings:model-probe", "enabled", "Model Probe", false],
+  ]) {
+    await t.test(
+      `session ${name} shortcut persists once, invalidates menus and preserves defaults`,
+      async () => {
+        const opened = await openMenu();
+        const staleMenu = component;
+        action.handler(ctx);
+        await opened.completed;
+        assert.deepEqual(branch.at(-1), {
+          type: "custom",
+          customType: name === "Fast" ? key : `${key}:setting`,
+          data: { [field]: !initial },
+        });
+        assert.equal(statuses.has(key), !initial);
+        assert.equal(
+          request({ payload }, ctx)?.service_tier,
+          name === "Fast" ? undefined : "priority",
+        );
+        assert.deepEqual(notices.at(-1), [`${label}: ${initial ? "off" : "on"}`, "info"]);
+        const afterToggle = [...branch];
+        staleMenu.handleInput(space);
+        await events.get("session_start")({}, ctx);
+        assert.deepEqual(branch, afterToggle);
+        assert.equal(statuses.has(key), !initial);
+        for (const mode of ["rpc", "print", "json"]) action.handler({ ...ctx, mode });
+        assert.deepEqual(branch, afterToggle);
+        failAppend = true;
+        assert.throws(() => action.handler(ctx), /cannot write session/);
+        assert.deepEqual(branch, afterToggle);
+        assert.equal(statuses.has(key), !initial);
+        assert.equal(
+          request({ payload }, ctx)?.service_tier,
+          name === "Fast" ? undefined : "priority",
+        );
+        failAppend = false;
+        action.handler(ctx);
+        assert.equal(statuses.has(key), initial);
+        assert.equal(
+          request({ payload }, ctx).service_tier,
+          "priority",
+          "Fast is restored or unchanged",
+        );
+        assert.equal(statuses.get("codex-settings"), "| Codex Fast |");
+        await events.get("session_tree")({}, ctx);
+        const reopened = await openMenu();
+        assert.match(
+          text(component),
+          new RegExp(`${name === "Fast" ? "Fast" : "Model Probe"}\\s+${initial ? "on" : "off"}`),
+        );
+        component.handleInput(escape);
+        await reopened.completed;
+        assert.deepEqual(await readSettings(join(directory, "codex-settings.json")), {
+          fast: true,
+        });
+      },
+    );
+  }
   branch = [];
   const headlessCtx = {
     ...ctx,

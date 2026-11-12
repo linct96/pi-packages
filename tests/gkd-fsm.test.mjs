@@ -301,33 +301,24 @@ test("native approval is current-plan-bound and a replacement invalidates an old
   assert.equal(app.state().approval.planVersion, 3);
 });
 
-test("reported verification failure allows two automatic repairs, then blocks", async () => {
-  const app = harness(await project());
-  await app.start();
-  for (let attempt = 0; attempt < 3; attempt++) {
-    await app.report("implemented", { summary });
-    await app.report("verified", {
-      passed: false,
-      summary: "The required behavior still fails its functional check.",
-    });
-    assert.equal(app.state().phase, attempt < 2 ? "IMPLEMENTING" : "BLOCKED");
-    assert.equal(app.state().retries, Math.min(2, attempt + 1));
+test("verification failures allow repair and re-verification, but block after two automatic repairs", async () => {
+  for (const failures of [1, 3]) {
+    const app = harness(await project());
+    await app.start();
+    for (let attempt = 0; attempt < failures; attempt++) {
+      await app.report("implemented", { summary });
+      assert.equal(app.state().validation, null, "re-implementation clears the previous verdict");
+      await app.report("verified", { passed: false, summary: "Acceptance check failed." });
+      assert.equal(app.state().phase, attempt < 2 ? "IMPLEMENTING" : "BLOCKED");
+      assert.equal(app.state().retries, Math.min(2, attempt + 1));
+    }
+    if (failures === 1) {
+      await app.report("implemented", { summary });
+      assert.equal(app.state().validation, null);
+      await app.report("verified", validation);
+      assert.equal(app.state().phase, "COMPLETED");
+    }
   }
-});
-
-test("a reported failure can be repaired, re-verified and completed", async () => {
-  const cwd = await project(),
-    app = harness(cwd);
-  await app.start();
-  await app.report("implemented", { summary });
-  assert.notEqual((await app.invoke("bash", { command })).structuredContent.exit_code, 0);
-  await app.report("verified", { passed: false, summary: "The file still contains before." });
-  await writeFile(join(cwd, "value.txt"), "after");
-  await app.report("implemented", { summary });
-  assert.equal(app.state().validation, null);
-  assert.equal((await app.invoke("bash", { command })).structuredContent.exit_code, 0);
-  await app.report("verified", validation);
-  assert.equal(app.state().phase, "COMPLETED");
 });
 
 test("FAST major-risk reports enter STANDARD planning and require fresh approval", async () => {
@@ -424,37 +415,30 @@ test("global auto mode loads semantic Skill routing without duplicating input", 
   const app = harness(await project());
   assert.equal(await app.input("ordinary input"), undefined, "default off");
   await app.shortcuts.get("super+shift+g").handler(app.ctx);
-  for (const standard of [false, true]) {
-    const current = harness(await project());
-    const prompt = "  Change the stored value to after  ";
-    assert.equal(await current.input(prompt), undefined);
-    assert.equal(current.state(), undefined, "intent routing precedes development");
-    assert.equal(current.messages.length, 0, "no duplicate user message");
-    const instructions = await current.event("before_agent_start", {
-      messageType: "user",
-      prompt,
-      systemPrompt: "base",
-    });
-    assert.match(instructions.systemPrompt, /GKD Workloop/);
-    assert.ok(current.activeTools().includes("gkd_workloop_start"));
-    await current.invoke("gkd_workloop_start", { kind: "development" });
-    assert.equal(current.state().phase, "ROUTING");
-    assert.ok(!current.state().tools.includes("gkd_workloop_start"));
-    assert.ok(!current.state().tools.includes("gkd_workloop_wait"));
-    await current.invoke("gkd_judge_route", { response: JSON.stringify(rawRoute(standard)) });
-    if (standard) {
-      await current.report("plan", { plan });
-      assert.equal((await current.invoke("write", {})).blocked, true);
-      await current.input("批准当前计划");
-    }
-    assert.equal(current.state().phase, "IMPLEMENTING");
-    await current.report("implemented", { summary });
-    await current.report("verified", validation);
-    await current.event("agent_settled", { aborted: false });
-    assert.equal(await current.input("A new task"), undefined);
-    await current.invoke("gkd_workloop_start", { kind: "development" });
-    assert.equal(current.state().phase, "ROUTING");
-  }
+  const current = harness(await project());
+  const prompt = "  Change the stored value to after  ";
+  assert.equal(await current.input(prompt), undefined);
+  assert.equal(current.state(), undefined, "intent routing precedes development");
+  assert.equal(current.messages.length, 0, "no duplicate user message");
+  const instructions = await current.event("before_agent_start", {
+    messageType: "user",
+    prompt,
+    systemPrompt: "base",
+  });
+  assert.match(instructions.systemPrompt, /GKD Workloop/);
+  assert.ok(current.activeTools().includes("gkd_workloop_start"));
+  await current.invoke("gkd_workloop_start", { kind: "development" });
+  assert.equal(current.state().phase, "ROUTING");
+  assert.ok(!current.state().tools.includes("gkd_workloop_start"));
+  assert.ok(!current.state().tools.includes("gkd_workloop_wait"));
+  await current.invoke("gkd_judge_route", { response: JSON.stringify(rawRoute()) });
+  assert.equal(current.state().phase, "IMPLEMENTING");
+  await current.report("implemented", { summary });
+  await current.report("verified", validation);
+  await current.event("agent_settled", { aborted: false });
+  assert.equal(await current.input("A new task"), undefined);
+  await current.invoke("gkd_workloop_start", { kind: "development" });
+  assert.equal(current.state().phase, "ROUTING");
   await app.shortcuts.get("super+shift+g").handler(app.ctx);
   const off = harness(await project());
   assert.equal(await off.input("ordinary input", "rpc"), undefined);

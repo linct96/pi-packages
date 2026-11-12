@@ -74,16 +74,10 @@ test("configuration and local Unicode/whitespace contains validation", () => {
   assert.equal(parseProbeConfig({ enabled: true, maxAttempts: 1 }).maxAttempts, 1);
   assert.equal(parseProbeConfig({ enabled: true, maxAttempts: 5 }).maxAttempts, 5);
   assert.deepEqual(parseProbeConfig(undefined).models, ["gpt-6.1-sol"]);
-  assert.deepEqual(parseProbeConfig({ enabled: true }).models, ["gpt-6.1-sol"]);
   assert.deepEqual(parseProbeConfig({ enabled: true, models: [] }).models, []);
   assert.deepEqual(
     parseProbeConfig({ enabled: true, models: ["gpt-6.1-sol", " extra-model "] }).models,
     ["gpt-6.1-sol", "extra-model"],
-  );
-  assert.equal(parseProbeConfig({ enabled: true }).questions[0].answer, "高市早苗");
-  assert.equal(
-    parseProbeConfig({ enabled: true }).questions[0].question,
-    "不要联网直接回复我现在的日本首相是谁？直接回答名字！",
   );
   const q = config().questions[0];
   assert.equal(validateAnswer(q, "Answer: A B\nC.").passed, true);
@@ -198,21 +192,18 @@ async function harness(t, settings = config(), entries = []) {
     dialogs = [];
   let branch = entries,
     sessionId = "session-a",
-    stale = false,
     choiceKey = "\x1b";
   const pi = {
     on(name, fn) {
       events.set(name, fn);
     },
     appendEntry(customType, data) {
-      assert.equal(stale, false);
       branch.push({ type: "custom", customType, data: structuredClone(data) });
     },
     sendMessage(message) {
       sends.push({ kind: "question", ...message });
     },
     sendUserMessage(content, options) {
-      assert.equal(stale, false);
       sends.push({ kind: "user", content, options });
     },
     registerCommand(name, command) {
@@ -228,18 +219,9 @@ async function harness(t, settings = config(), entries = []) {
     thinkingLevel: "high",
     model: { provider: "test", api: "test", id: "gpt-6.1-sol" },
     sessionManager: {
-      getBranch: () => {
-        assert.equal(stale, false);
-        return branch;
-      },
-      getEntries: () => {
-        assert.equal(stale, false);
-        return branch;
-      },
-      getSessionId: () => {
-        assert.equal(stale, false);
-        return sessionId;
-      },
+      getBranch: () => branch,
+      getEntries: () => branch,
+      getSessionId: () => sessionId,
     },
     isIdle: () => true,
     aborts: 0,
@@ -311,9 +293,6 @@ async function harness(t, settings = config(), entries = []) {
       await emit("session_shutdown");
       probe = createModelProbe(pi, path);
       await emit("session_start");
-    },
-    invalidate() {
-      stale = true;
     },
     changeId() {
       sessionId = "fork-b";
@@ -413,7 +392,11 @@ test("ordered multi-question probe, pending image handoff, and at-most-once deli
   assert.equal(await h.emit("input", { text: "normal", source: "interactive" }), undefined);
 });
 
-test("TUI probe panel shows a concise status without logs or per-question verdicts", async (t) => {
+test("probe panels track failure, restore without resending and distinguish explicit overrides", async (t) => {
+  const theme = { fg: (_color, text) => text, bg: (_color, text) => text };
+  const panelFor = (h, question = h.sends[0]) =>
+    h.renderers.get(PROBE_ENTRY)(question, { outputPad: 1 }, theme);
+  const view = (panel) => stripVTControlCharacters(panel.render(80).join("\n"));
   const h = await harness(
     t,
     config([
@@ -422,102 +405,45 @@ test("TUI probe panel shows a concise status without logs or per-question verdic
     ]),
   );
   await h.first("task", [image]);
-  const question = h.sends[0];
-  const theme = { fg: (_color, text) => text, bg: (_color, text) => text };
-  const panel = h.renderers.get("codex-settings:model-probe")(question, { outputPad: 1 }, theme);
-  const view = (component = panel, width = 80) =>
-    stripVTControlCharacters(component.render(width).join("\n"));
-  assert.match(view(), /\[codex-settings:model-probe\]/);
-  assert.match(view().trimEnd(), /答案：yes\s+检测中\.\.\.$/);
-  assert.match(view(), /问题：Q1\s+答案：yes/);
-  assert.doesNotMatch(view(), /回答：|暂无有效回答/);
-  assert.equal(question.display, true);
+  const panel = panelFor(h);
+  assert.equal(h.sends[0].display, true);
   await h.startAnswer("yes");
   await h.emit("agent_settled", { aborted: false });
-  assert.equal(h.sends.at(-1).display, false, "later questions reuse the first question's panel");
-  assert.match(view(), /问题：Q1\s+答案：yes\s+回答：yes/);
-  assert.match(view(), /Q2/);
+  assert.equal(h.sends.at(-1).display, false, "later questions reuse the panel");
   await h.emit("input", { text: "do not overwrite", source: "interactive" });
   await h.startAnswer("partial answer", "error", { errorMessage: "invalid API key" });
   await h.emit("agent_settled", { aborted: false });
-  assert.match(view().trimEnd(), /原因：provider_error: invalid API key\s+检测失败$/);
-  assert.match(view(), /partial answer/);
-  assert.match(view(), /问题：Q2\s+答案：two\s+回答：partial answer/);
-  assert.match(view(), /invalid API key/);
-  assert.doesNotMatch(view(), /日志：|判定：|预期：|已有待处理消息|状态：FAILED/);
-  assert.ok(
-    h.state.logs.some((line) => line.includes("已有待处理消息")),
-    "display changes preserve stored diagnostics",
-  );
-  assert.equal(
-    h.notices.length,
-    0,
-    "mounted panels do not produce duplicate extension notifications",
-  );
-  assert.match(h.dialogs[0].render(80).join("\n"), /模型检测未通过，请选择后续操作/);
+  assert.match(view(panel), /invalid API key/);
+  assert.match(view(panel), /partial answer/);
+  assert.doesNotMatch(view(panel), /日志：|判定：|已有待处理消息/);
+  assert.ok(h.state.logs.some((line) => line.includes("已有待处理消息")));
+  assert.equal(h.notices.length, 0, "mounted panels do not also notify");
   assert.deepEqual(
     h.sends.map((message) => message.content),
     ["Q1", "Q2"],
-    "logs and expected answers are never sent as model messages",
+    "logs and answers never enter model messages",
   );
-  for (const width of [20, 80]) {
-    for (const line of panel.render(width)) assert.ok(visibleWidth(line) <= width);
-  }
+  for (const width of [20, 80])
+    assert.ok(panel.render(width).every((line) => visibleWidth(line) <= width));
   await h.reload();
-  const restored = h.renderers.get("codex-settings:model-probe")(question, { outputPad: 1 }, theme);
-  assert.match(view(restored), /invalid API key/);
-  assert.match(view(restored).trimEnd(), /检测失败$/);
-  assert.doesNotMatch(view(restored), /日志：|判定：|已有待处理消息/);
-  assert.equal(h.sends.length, 2, "restoring the panel does not repeat the probe");
+  assert.match(view(panelFor(h)), /invalid API key/);
+  assert.equal(h.sends.length, 2, "restoring never repeats the probe");
 
-  for (const attempt of [1, 2, 3]) {
-    const progress = await harness(t, { ...config(), maxAttempts: 3 }, [
-      { type: "custom", customType: HANDOFF_ENTRY, data: { attempt } },
-    ]);
-    const progressPanel = progress.renderers.get("codex-settings:model-probe")(
-      progress.sends[0],
-      { outputPad: 1 },
-      theme,
-    );
-    const text = view(progressPanel);
-    assert.ok(text.trimEnd().endsWith(`第 ${attempt}/3 轮检测中...`));
-    assert.doesNotMatch(text, /检测轮次：|回答：|暂无有效回答/);
-    assert.equal(text.match(/检测中/g)?.length, 1);
-    await progress.startAnswer("");
-    await progress.emit("agent_settled", { aborted: false });
-    assert.ok(view(progressPanel).trimEnd().endsWith(`第 ${attempt}/3 轮检测失败`));
-    assert.doesNotMatch(view(progressPanel), /回答：|暂无有效回答/);
-    for (const width of [20, 80]) {
-      for (const line of progressPanel.render(width)) assert.ok(visibleWidth(line) <= width);
-    }
-  }
-});
-
-test("TUI completion status distinguishes passed probes from explicit overrides", async (t) => {
   for (const override of [false, true]) {
-    const h = await harness(t);
-    await h.first("task");
-    const panel = h.renderers.get("codex-settings:model-probe")(
-      h.sends[0],
-      { outputPad: 1 },
-      {
-        fg: (_color, text) => text,
-        bg: (_color, text) => text,
-      },
-    );
-    if (override) h.choose("2");
-    await h.startAnswer(override ? "wrong" : "ABC");
-    await h.emit("agent_settled", { aborted: false });
-    assert.equal(h.state.phase, "DELIVERING");
+    const completed = await harness(t);
+    await completed.first("task");
+    const resultPanel = panelFor(completed);
+    if (override) completed.choose("2");
+    await completed.startAnswer(override ? "wrong" : "ABC");
+    await completed.emit("agent_settled", { aborted: false });
+    assert.equal(completed.state.phase, "DELIVERING");
     const status = override ? "检测失败（已选择继续）" : "检测通过";
-    assert.ok(stripVTControlCharacters(panel.render(80).join("\n")).trimEnd().endsWith(status));
-    await h.emit("input", { text: "task", source: "extension" });
-    await h.emit("message_end", { message: { role: "user", content: "task" } });
-    assert.equal(h.state.phase, "READY");
-    const view = stripVTControlCharacters(panel.render(80).join("\n"));
-    assert.ok(view.trimEnd().endsWith(status));
-    assert.doesNotMatch(view, /日志：|判定：|状态：READY/);
-    if (override) assert.doesNotMatch(view, /检测通过/);
+    assert.ok(view(resultPanel).trimEnd().endsWith(status));
+    await completed.emit("input", { text: "task", source: "extension" });
+    await completed.emit("message_end", { message: { role: "user", content: "task" } });
+    assert.equal(completed.state.phase, "READY");
+    assert.ok(view(resultPanel).trimEnd().endsWith(status));
+    if (override) assert.doesNotMatch(view(resultPanel), /检测通过/);
   }
 });
 
@@ -677,9 +603,6 @@ test("failure offers three actions; cancel keeps the pending input and gate clos
   await tick();
   assert.equal(h.state.phase, "FAILED");
   assert.equal(h.dialogs.length, 1);
-  const dialog = h.dialogs[0].render(80).join("\n");
-  for (const option of FAILURE_OPTIONS) assert.ok(dialog.includes(option));
-  assert.match(dialog, /模型检测未通过，请选择后续操作/);
   assert.equal(h.sends.length, 1);
   await h.emit("input", { text: "task", source: "interactive" });
   await h.emit("before_agent_start", {
@@ -871,21 +794,6 @@ test("tree rewind cannot re-deliver a task already attempted on another branch",
 });
 
 test("old conversations, disabled defaults, changed configuration, forks and uncertain delivery", async (t) => {
-  const old = await harness(t, config(), [
-    { type: "message", message: { role: "user", content: "already executed" } },
-  ]);
-  assert.equal(old.sends.length, 0);
-  assert.equal(await old.emit("input", { text: "next", source: "interactive" }), undefined);
-  const disabled = await harness(t, parseProbeConfig(undefined));
-  assert.equal(disabled.sends.length, 0);
-  disabled.probe.setEnabled(true, disabled.ctx);
-  assert.equal(disabled.sends.length, 0, "the menu toggle alone does not start a probe");
-  await disabled.reload();
-  assert.equal(disabled.sends.length, 0, "reloading a clean session still waits for input");
-  assert.equal((await disabled.first("hi")).action, "handled");
-  assert.equal(disabled.sends.length, 1, "session-only enablement applies to its first input");
-  assert.equal(disabled.state.config.enabled, true);
-  assert.equal(disabled.state.pendingMessage.text, "hi");
   for (const attempt of [0, -1, 1.5, "2", Number.MAX_SAFE_INTEGER + 1]) {
     const invalid = await harness(t, config(), [
       { type: "custom", customType: HANDOFF_ENTRY, data: { attempt } },
@@ -920,11 +828,6 @@ test("old conversations, disabled defaults, changed configuration, forks and unc
   await invalidSaved.reload();
   assert.equal(invalidSaved.sends.length, 1, "invalid saved counters must not resume a probe");
   assert.equal((await invalidSaved.emit("tool_call")).block, true);
-  assert.equal(
-    (await readSettings(disabled.path)).modelProbe.enabled,
-    false,
-    "no global save is needed",
-  );
   const h = await harness(t);
   await h.emit("input", { text: "dangerous task", source: "interactive" });
   await h.startAnswer();

@@ -73,6 +73,15 @@ test("loading is inert; TUI startup sets only the shape and shows one setup noti
   cursor.shutdown();
   assert.deepEqual(cursor.writes, ["\x1b[5 q", "\x1b[0 q"]);
   assert.equal(await readFile(settingsPath, "utf8"), settings);
+  await cursor.start();
+  cursor.shutdown();
+  assert.equal(cursor.notifications.length, 1, "session replacement does not repeat the notice");
+  cursor.reload();
+  await cursor.start();
+  assert.equal(cursor.notifications.length, 1, "a new runtime reads the persisted notice");
+  assert.equal(await readFile(settingsPath, "utf8"), settings);
+  cursor.shutdown();
+  assert.deepEqual(cursor.writes, Array(3).fill(["\x1b[5 q", "\x1b[0 q"]).flat());
 });
 
 test("non-TUI and non-TTY sessions have no effects and do not consume the notice", async (t) => {
@@ -92,31 +101,10 @@ test("non-TUI and non-TTY sessions have no effects and do not consume the notice
   Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
   await cursor.start();
   assert.deepEqual(cursor.notifications, [notice]);
-});
-
-test("session replacement and a fresh extension runtime do not repeat the notice", async (t) => {
-  const cursor = await setup(t);
-  await cursor.start();
-  cursor.shutdown();
-  await cursor.start();
-  cursor.shutdown();
-  assert.deepEqual(cursor.writes, ["\x1b[5 q", "\x1b[0 q", "\x1b[5 q", "\x1b[0 q"]);
-  assert.deepEqual(cursor.notifications, [notice]);
-  cursor.writes.length = 0;
-  cursor.notifications.length = 0;
-  cursor.reload();
-  await cursor.start();
-  assert.deepEqual(cursor.writes, ["\x1b[5 q"]);
-  assert.deepEqual(cursor.notifications, []);
-  cursor.shutdown();
-});
-
-test("cleanup does not write escapes if output is no longer a TTY", async (t) => {
-  const cursor = await setup(t);
-  await cursor.start();
+  const beforeCleanup = [...cursor.writes];
   Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
   cursor.shutdown();
-  assert.deepEqual(cursor.writes, ["\x1b[5 q"]);
+  assert.deepEqual(cursor.writes, beforeCleanup);
 });
 
 test("notice persistence failure warns but still explains setup and preserves cleanup", async (t) => {

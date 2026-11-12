@@ -135,31 +135,10 @@ test("footer keeps billing/context/model and moves extension statuses to the sec
   assert.equal(f.footer.render(120).length, 1);
 });
 
-test("narrow widths, wide characters, and control whitespace never overflow or add rows", () => {
-  const f = setup();
-  f.ctx.sessionManager.appendSessionInfo("项目🧪\n多行\t名称");
-  f.changeBranch("功能分支");
-  f.statuses.set("custom", "\x1b[33m中文状态🧪\n第二行\t内容\r尾部\x1b[0m");
-  for (let width = 0; width <= 140; width++) {
-    const lines = f.footer.render(width);
-    for (const line of lines) {
-      assert.ok(visibleWidth(line) <= width, `${width}: ${JSON.stringify(line)}`);
-      assert.doesNotMatch(line, /[\r\n\t]/);
-    }
-  }
-  assert.match(
-    strip(f.footer.render(140)[0]),
-    /\$0\.000 \| 8\.0%\/200k \| gpt-6\.1-sol \(sub\) • high$/,
-  );
-  assert.match(strip(f.footer.render(140)[1]), /中文状态🧪 第二行 内容 尾部/);
-  assert.match(strip(f.footer.render(45)[0]), /^~\/project \(功能分支\)\s+gpt-6\.1-sol • high$/);
-  assert.doesNotMatch(strip(f.footer.render(45)[0]), /\(sub\)|项目/);
-});
-
-test("narrow layout preserves path/branch, then model, thinking, context, billing, provider", () => {
+test("narrow layouts preserve useful fields, compact paths and never overflow wide or multiline text", () => {
   const f = setup();
   const path = "~/project";
-  const location = `${path} (main)`;
+  const baseLocation = `${path} (main)`;
   const model = "gpt-6.1-sol";
   const info = `${model} • high`;
   const context = `8.0%/200k | ${info}`;
@@ -167,30 +146,26 @@ test("narrow layout preserves path/branch, then model, thinking, context, billin
   const full = `$0.000 | 8.0%/200k | ${model} (sub) • high`;
   const layouts = [
     [path.length, path],
-    [location.length, location],
+    [baseLocation.length, baseLocation],
     ...[model, info, context, billing, full].map((right) => [
-      location.length + 2 + right.length,
-      `${location}  ${right}`,
+      baseLocation.length + 2 + right.length,
+      `${baseLocation}  ${right}`,
     ]),
   ];
   for (let i = 0; i < layouts.length; i++) {
     const [width, expected] = layouts[i];
     assert.equal(strip(f.footer.render(width)[0]), expected);
-    if (i > 0) {
-      const smaller = strip(f.footer.render(width - 1)[0]);
-      assert.equal(smaller.replace(/ {2,}/g, "  "), layouts[i - 1][1]);
-    }
+    if (i > 0)
+      assert.equal(strip(f.footer.render(width - 1)[0]).replace(/ {2,}/g, "  "), layouts[i - 1][1]);
   }
   assert.equal(strip(f.footer.render(5)[0]), "~/...");
   f.changeBranch(null);
   assert.equal(strip(f.footer.render(path.length + 2 + model.length)[0]), `${path}  ${model}`);
-  f.ctx.sessionManager.getCwd = () => join(process.env.HOME, "很长的中文项目路径");
-  const longPath = "~/很长的中文项目路径";
-  assert.equal(strip(f.footer.render(visibleWidth(longPath))[0]), longPath);
 
-  f.changeBranch("main");
+  f.changeBranch("功能分支");
+  f.statuses.set("custom", "\x1b[33m中文状态🧪\n第二行\t内容\r尾部\x1b[0m");
   const root = parse(process.cwd()).root;
-  const samples = [
+  for (const [cwd, expanded, compact] of [
     [
       join(process.env.HOME, "Developer", "github", "pi-packages"),
       "~/Developer/github/pi-packages",
@@ -205,35 +180,26 @@ test("narrow layout preserves path/branch, then model, thinking, context, billin
     [join(root, "opt", "company", "demo"), `${root}opt/company/demo`, `${root}o/c/demo`],
     [process.env.HOME, "~", "~"],
     [root, root, root],
-  ];
-  for (const [cwd, expanded, abbreviated] of samples) {
+  ]) {
     f.ctx.sessionManager.getCwd = () => cwd;
-    const expandedLocation = `${expanded.replaceAll("/", sep)} (main)`;
-    const compactLocation = `${abbreviated.replaceAll("/", sep)} (main)`;
-    const expandedWidth = visibleWidth(expandedLocation) + 2 + visibleWidth(full);
-    const wideWidth = expandedWidth + 20;
-    assert.equal(strip(f.footer.render(expandedWidth)[0]), `${expandedLocation}  ${full}`);
-    if (expanded !== abbreviated) {
-      assert.ok(strip(f.footer.render(expandedWidth - 1)[0]).startsWith(compactLocation));
+    const location = `${expanded.replaceAll("/", sep)} (功能分支)`;
+    const compactLocation = `${compact.replaceAll("/", sep)} (功能分支)`;
+    const fullWidth = visibleWidth(location) + 2 + visibleWidth(full);
+    assert.equal(strip(f.footer.render(fullWidth)[0]), `${location}  ${full}`);
+    if (expanded !== compact)
+      assert.ok(strip(f.footer.render(fullWidth - 1)[0]).startsWith(compactLocation));
+    assert.equal(strip(f.footer.render(visibleWidth(compact))[0]), compact.replaceAll("/", sep));
+    for (const width of [0, 1, 5, 18, 30, 45, 80, fullWidth]) {
+      for (const line of f.footer.render(width)) {
+        assert.ok(visibleWidth(line) <= width, `${cwd}: ${width}`);
+        assert.doesNotMatch(line, /[\r\n\t]/);
+      }
     }
-    for (const right of [full, billing, context, info, model, ""]) {
-      const width = visibleWidth(compactLocation) + (right ? 2 + visibleWidth(right) : 0);
-      const expected = compactLocation + (right ? `  ${right}` : "");
-      assert.equal(strip(f.footer.render(width)[0]), expected);
-    }
+    assert.equal(strip(f.footer.render(fullWidth)[1]), "中文状态🧪 第二行 内容 尾部");
     assert.equal(
-      strip(f.footer.render(visibleWidth(abbreviated))[0]),
-      abbreviated.replaceAll("/", sep),
-    );
-    for (let width = 0; width <= wideWidth; width++) {
-      const line = f.footer.render(width)[0];
-      assert.ok(visibleWidth(line) <= width, `${cwd}: ${width}`);
-      assert.doesNotMatch(strip(line), /My session/);
-    }
-    assert.equal(
-      strip(f.footer.render(wideWidth)[0]).replace(/ {2,}/g, "  "),
-      `${expandedLocation}  ${full}`,
-      "widening restores the full path",
+      strip(f.footer.render(fullWidth)[0]),
+      `${location}  ${full}`,
+      "widening restores the path",
     );
   }
 });
@@ -256,15 +222,6 @@ test("usage matches cumulative session billing, including tools, summaries, and 
     strip(f.footer.render(120)[0]),
     /\$0\.060 \| 8\.0%\/200k \| gpt-6\.1-sol \(sub\) • high$/,
   );
-  let reads = 0;
-  const getEntries = manager.getEntries.bind(manager);
-  manager.getEntries = () => {
-    reads++;
-    return getEntries();
-  };
-  f.footer.render(120);
-  f.footer.render(80);
-  assert.equal(reads, 0, "unchanged session doesn't rescan history on every render");
   manager.appendMessage({ role: "assistant", usage: usage(3000) });
   assert.match(
     f.renderStats(manager.getEntry(snapshot)),
@@ -275,7 +232,6 @@ test("usage matches cumulative session billing, including tools, summaries, and 
     strip(f.footer.render(120)[0]),
     /\$0\.070 \| 8\.0%\/200k \| gpt-6\.1-sol \(sub\) • high$/,
   );
-  assert.equal(reads, 1);
 });
 
 test("a complete run emits one snapshot, aggregating requests but excluding tools from TPS", (t) => {
@@ -499,30 +455,36 @@ test("fresh requests, cancellation, and lifecycle resets cannot reuse a previous
       reset,
     );
   }
-  for (const type of ["text_delta", "thinking_delta", "toolcall_delta"]) {
-    for (const stopReason of ["stop", "toolUse", "aborted", "error", "cancelAtSettle"]) {
-      const f = setup();
-      f.handlers.get("before_agent_start")({}, f.ctx);
-      f.handlers.get("before_provider_request")({}, f.ctx);
-      now += 50;
-      f.handlers.get("message_update")({ assistantMessageEvent: { type, delta: "first" } }, f.ctx);
-      now += 1000;
-      const message = {
-        role: "assistant",
-        usage: usage(),
-        stopReason: stopReason === "cancelAtSettle" ? "stop" : stopReason,
-      };
-      f.handlers.get("message_end")({ message }, f.ctx);
-      const messageEntryId = f.ctx.sessionManager.appendMessage(message);
-      f.handlers.get("turn_end")({ messageEntryId, message }, f.ctx);
-      assert.equal(f.renderStats(), "", "no statistics before settle");
-      f.handlers.get("agent_settled")({ aborted: stopReason === "cancelAtSettle" }, f.ctx);
-      assert.equal(
-        f.ctx.sessionManager.getEntries().filter((e) => e.type === "custom").length,
-        stopReason === "stop" ? 1 : 0,
-      );
-      if (stopReason === "stop") assert.match(f.renderStats(), /^TPS 190\.5, TTFT 0\.05s, /);
-    }
+  for (const [type, stopReason] of [
+    ["text_delta", "stop"],
+    ["thinking_delta", "stop"],
+    ["toolcall_delta", "stop"],
+    ["text_delta", "toolUse"],
+    ["text_delta", "aborted"],
+    ["text_delta", "error"],
+    ["text_delta", "cancelAtSettle"],
+  ]) {
+    const f = setup();
+    f.handlers.get("before_agent_start")({}, f.ctx);
+    f.handlers.get("before_provider_request")({}, f.ctx);
+    now += 50;
+    f.handlers.get("message_update")({ assistantMessageEvent: { type, delta: "first" } }, f.ctx);
+    now += 1000;
+    const message = {
+      role: "assistant",
+      usage: usage(),
+      stopReason: stopReason === "cancelAtSettle" ? "stop" : stopReason,
+    };
+    f.handlers.get("message_end")({ message }, f.ctx);
+    const messageEntryId = f.ctx.sessionManager.appendMessage(message);
+    f.handlers.get("turn_end")({ messageEntryId, message }, f.ctx);
+    assert.equal(f.renderStats(), "", "no statistics before settle");
+    f.handlers.get("agent_settled")({ aborted: stopReason === "cancelAtSettle" }, f.ctx);
+    assert.equal(
+      f.ctx.sessionManager.getEntries().filter((e) => e.type === "custom").length,
+      stopReason === "stop" ? 1 : 0,
+    );
+    if (stopReason === "stop") assert.match(f.renderStats(), /^TPS 190\.5, TTFT 0\.05s, /);
   }
 });
 

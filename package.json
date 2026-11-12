@@ -20,7 +20,7 @@
     "format:check": "oxfmt --check .",
     "lint": "oxlint --deny-warnings .",
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.mjs"
+    "test": "node --experimental-strip-types --test tests/*.test.mjs extensions/gkd-workflow/pi-dev-workflow/test/*.test.mjs"
   },
   "pi": {
     "extensions": [

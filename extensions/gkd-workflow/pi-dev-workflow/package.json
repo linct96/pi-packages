@@ -20,7 +20,7 @@
     "typebox": "*"
   },
   "scripts": {
-    "test": "node --test test/*.test.cjs"
+    "test": "node --experimental-strip-types --test test/*.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
