@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
@@ -13,6 +23,17 @@ import {
   ROUTE_POLICY,
 } from "../extensions/gkd-workflow/judge-route/index.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import larkWorkloop from "../extensions/lark-workloop/index.ts";
+import { createTracker } from "../extensions/lark-workloop/scripts/create.ts";
+import { bindingsPath, manageBindings } from "../extensions/lark-workloop/scripts/bindings.ts";
+import {
+  CACHE_TTL_MS,
+  REQUIRED_SCOPES,
+  checkLarkCli,
+  invalidatePreflightCache,
+  preflightCachePath,
+  readPreflightCache,
+} from "../extensions/lark-workloop/scripts/preflight.ts";
 
 const parseRoute = (raw) => parseRouteResponse(JSON.stringify(raw));
 const originalTools = ["read", "bash", "edit", "write"];
@@ -115,10 +136,752 @@ function router() {
   };
 }
 
+// 隔离 CLI 与缓存，校验统一 Skill 交接、入口门禁及独立检查脚本。
+async function verifyLarkPreflight() {
+  const root = await mkdtemp(join(tmpdir(), "lark-preflight-"));
+  const keys = [
+    "PATH",
+    "PI_CODING_AGENT_DIR",
+    "LARK_TEST_STATUS",
+    "LARK_TEST_CALLS",
+    "LARK_TEST_EXIT",
+  ];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    process.env.PATH = bin;
+    process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+    process.env.LARK_TEST_CALLS = join(root, "calls.ndjson");
+    assert.equal((await checkLarkCli()).status, "missing-cli");
+    assert.equal(await readPreflightCache(), undefined);
+    const commands = new Map();
+    const sent = [];
+    const reported = [];
+    const hidden = [];
+    let failDispatch = false;
+    larkWorkloop({
+      registerCommand: (name, command) => commands.set(name, command),
+      on: () => assert.fail("Shortcut must not register check lifecycle hooks"),
+      sendUserMessage: (...args) => {
+        assert.deepEqual(hidden.at(-1), {
+          customType: "lark-workloop-context",
+          content: context,
+          display: false,
+        });
+        if (failDispatch) throw new Error("private-dispatch-details");
+        sent.push(args);
+      },
+      sendMessage: (message, options) => {
+        assert.deepEqual(options, { triggerTurn: false });
+        (message.customType === "lark-workloop-context" ? hidden : reported).push(message);
+      },
+    });
+    assert.deepEqual([...commands.keys()], ["lark-workloop"]);
+    assert.deepEqual(sent, []);
+    const run = commands.get("lark-workloop").handler;
+    const idle = { cwd: root, isIdle: () => true, hasPendingMessages: () => false };
+    const context = `\n\n[lark-workloop 当前会话]\n${JSON.stringify({ cwd: root })}`;
+    const inputs = [
+      "",
+      "  ",
+      "检查一下授权",
+      "清除授权缓存，然后检查一下授权",
+      'work --larkurl https://example.feishu.cn/wiki/Abc123 --workspace "/tmp/my project"',
+      "work",
+      "work --larkurl https://example.feishu.cn/wiki/Abc123",
+      "check",
+      "check --force",
+      "check --invalidate",
+      "check --unknown",
+      "check --force --invalidate",
+      "unknown",
+    ];
+    for (const input of inputs) await run(input, idle);
+    assert.deepEqual(
+      sent,
+      inputs.map((input) => [
+        `/skill:lark-workloop ${input.trim()}`,
+        { expandPromptTemplates: true },
+      ]),
+    );
+    assert.deepEqual(reported, []);
+    assert.equal(await readPreflightCache(), undefined);
+    await assert.rejects(readFile(process.env.LARK_TEST_CALLS), { code: "ENOENT" });
+    const sentCount = sent.length;
+    failDispatch = true;
+    await run("check", idle);
+    assert.equal(reported[0].customType, "lark-workloop");
+    assert.match(reported[0].content, /分发未完成.*核对当前任务状态/s);
+    assert.doesNotMatch(reported.pop().content, /private-dispatch-details/);
+    failDispatch = false;
+    assert.equal(hidden.length, inputs.length + 1);
+    const hiddenCount = hidden.length;
+    for (const input of ["", "check", "work"]) {
+      for (const busy of [{ isIdle: () => false }, { hasPendingMessages: () => true }]) {
+        await run(input, { ...idle, ...busy });
+        assert.equal(reported.at(-1).customType, "lark-workloop");
+        assert.match(reported.pop().content, /操作未开始：Agent 正忙/);
+      }
+    }
+    assert.equal(sent.length, sentCount);
+    assert.equal(hidden.length, hiddenCount);
+    await mkdir(preflightCachePath(), { recursive: true });
+    await assert.rejects(checkLarkCli(), /无法读取.*缓存/);
+    await assert.rejects(invalidatePreflightCache());
+    await rm(preflightCachePath(), { recursive: true });
+    await invalidatePreflightCache();
+    assert.equal(await readPreflightCache(), undefined);
+    await writeFile(
+      join(bin, "lark-cli"),
+      `#!${process.execPath}\nconst fs = require("node:fs");\nfs.appendFileSync(process.env.LARK_TEST_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");\nprocess.stdout.write(process.env.LARK_TEST_STATUS || "{}");\nprocess.exitCode = Number(process.env.LARK_TEST_EXIT || 0);\n`,
+      { mode: 0o700 },
+    );
+    process.env.PATH = `${bin}${delimiter}${saved.PATH || ""}`;
+    const user = {
+      status: "ready",
+      verified: true,
+      scope: REQUIRED_SCOPES.join(" "),
+      token: "must-not-be-cached",
+    };
+    process.env.LARK_TEST_STATUS = JSON.stringify({
+      identities: { user: { ...user, verified: false } },
+    });
+    assert.equal((await checkLarkCli()).status, "needs-auth");
+    assert.equal(await readPreflightCache(), undefined);
+    sent.length = 0;
+    process.env.LARK_TEST_STATUS = JSON.stringify({
+      identities: { user: { ...user, scope: "base:record:read" } },
+    });
+    const missing = await checkLarkCli();
+    assert.equal(missing.status, "needs-auth");
+    assert.ok(missing.missingScopes.includes("base:record:update"));
+    assert.ok(!missing.missingScopes.includes("base:record:read"));
+    assert.equal(await readPreflightCache(), undefined);
+    process.env.LARK_TEST_STATUS = JSON.stringify({ identities: { user } });
+    const script = fileURLToPath(
+      new URL("../extensions/lark-workloop/scripts/preflight.ts", import.meta.url),
+    );
+    const checked = JSON.parse(
+      (await exec(process.execPath, ["--experimental-strip-types", script, "--force"])).stdout,
+    );
+    assert.equal(checked.status, "ready");
+    assert.equal(checked.cached, false);
+    assert.equal(checked.expiresAt - checked.checkedAt, CACHE_TTL_MS);
+    const cache = JSON.parse(await readFile(preflightCachePath(), "utf8"));
+    assert.deepEqual(Object.keys(cache).sort(), ["checkedAt", "scopes", "version"]);
+    assert.ok(!JSON.stringify(cache).includes("must-not-be-cached"));
+    if (process.platform !== "win32")
+      assert.equal((await stat(preflightCachePath())).mode & 0o777, 0o600);
+    const before = await readFile(process.env.LARK_TEST_CALLS, "utf8");
+    await run("解释工作流", idle);
+    await run("  处理指定问题表，绑定 apps/example  ", idle);
+    await run("check", idle);
+    await run("check --force", idle);
+    await run("check --invalidate", idle);
+    assert.deepEqual(
+      sent,
+      [
+        "解释工作流",
+        "处理指定问题表，绑定 apps/example",
+        "check",
+        "check --force",
+        "check --invalidate",
+      ].map((input) => [`/skill:lark-workloop ${input}`, { expandPromptTemplates: true }]),
+    );
+    assert.deepEqual(reported, []);
+    assert.equal((await checkLarkCli()).cached, true);
+    assert.equal(await readFile(process.env.LARK_TEST_CALLS, "utf8"), before);
+    assert.equal((await readPreflightCache()).checkedAt, cache.checkedAt);
+    assert.equal((await checkLarkCli(true)).cached, false);
+    const afterForce = await readFile(process.env.LARK_TEST_CALLS, "utf8");
+    assert.notEqual(afterForce, before);
+    await invalidatePreflightCache();
+    assert.equal(await readPreflightCache(), undefined);
+    assert.equal(await readFile(process.env.LARK_TEST_CALLS, "utf8"), afterForce);
+    await writeFile(
+      preflightCachePath(),
+      JSON.stringify({ ...cache, checkedAt: Date.now() - CACHE_TTL_MS - 1 }),
+    );
+    assert.equal((await checkLarkCli()).cached, false);
+    await writeFile(
+      preflightCachePath(),
+      JSON.stringify({ ...cache, checkedAt: Date.now() + CACHE_TTL_MS }),
+    );
+    assert.equal(await readPreflightCache(), undefined);
+    await writeFile(preflightCachePath(), "not json");
+    assert.equal((await checkLarkCli()).cached, false);
+    await writeFile(preflightCachePath(), JSON.stringify({ ...cache, scopes: [] }));
+    assert.equal(await readPreflightCache(), undefined);
+    await checkLarkCli();
+    process.env.LARK_TEST_EXIT = "3";
+    assert.equal((await checkLarkCli(true)).status, "needs-auth");
+    assert.equal(await readPreflightCache(), undefined);
+    process.env.LARK_TEST_EXIT = "4";
+    const failed = await checkLarkCli();
+    assert.equal(failed.status, "error");
+    assert.match(failed.message, /授权检查失败或超时/);
+    process.env.LARK_TEST_EXIT = "0";
+    process.env.LARK_TEST_STATUS = "not json";
+    assert.equal((await checkLarkCli()).status, "error");
+    assert.equal(await readPreflightCache(), undefined);
+    process.env.LARK_TEST_STATUS = JSON.stringify({ identities: { user } });
+    await checkLarkCli();
+    const cleared = JSON.parse(
+      (await exec(process.execPath, ["--experimental-strip-types", script, "--invalidate"])).stdout,
+    );
+    assert.equal(cleared.status, "invalidated");
+    assert.equal(await readPreflightCache(), undefined);
+    assert.ok(
+      (await readFile(process.env.LARK_TEST_CALLS, "utf8"))
+        .trim()
+        .split("\n")
+        .every((line) => {
+          assert.deepEqual(JSON.parse(line), ["auth", "status", "--json", "--verify"]);
+          return true;
+        }),
+    );
+  } finally {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+// 复用同一资源用例，创建链路仅访问隔离的假 CLI，不写真实飞书。
+async function verifyLarkCreate() {
+  const root = await mkdtemp(join(tmpdir(), "lark-create-"));
+  const keys = ["PATH", "LARK_TEST_CALLS", "LARK_TEST_FAIL", "LARK_TEST_FIELDS"];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const parent = "https://example.feishu.cn/wiki/parent123?table=ignored&view=ignored";
+  const template = JSON.parse(
+    await readFile(
+      new URL("../extensions/lark-workloop/assets/issue-tracker.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  try {
+    process.env.PATH = root;
+    process.env.LARK_TEST_CALLS = join(root, "calls.ndjson");
+    process.env.LARK_TEST_FIELDS = JSON.stringify(template.fields);
+    delete process.env.LARK_TEST_FAIL;
+    await writeFile(
+      join(root, "lark-cli"),
+      `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const value = (flag) => args[args.indexOf(flag) + 1];
+fs.appendFileSync(process.env.LARK_TEST_CALLS, JSON.stringify(args) + "\\n");
+if (process.env.LARK_TEST_FAIL === "malformed") { process.stdout.write("secret-must-not-leak"); process.exit(0); }
+if (args[1] === process.env.LARK_TEST_FAIL) {
+  process.stderr.write(JSON.stringify({ok:false,error:{code:99991679,missing_scopes:["base:record:create"],message:"secret-must-not-leak"}}));
+  process.exit(3);
+}
+let data = {};
+if (args[1] === "+node-get") data = value("--node-token").startsWith("https:")
+  ? {node_token:"parent123",space_id:"123456"}
+  : {node_token:"newNode",parent_node_token:"parent123",obj_token:"newBase",obj_type:"bitable"};
+if (args[1] === "+base-create") data = {base:{base_token:"newBase"},table:{id:"tblNew"}};
+if (args[1] === "+move") data = {ready:process.env.LARK_TEST_FAIL !== "pending-move",node_token:"newNode"};
+if (args[1] === "+view-list") data = {total:1,views:[{id:"vewDefault",type:"grid"}]};
+if (args[1] === "+table-get") data = {fields:JSON.parse(process.env.LARK_TEST_FIELDS)};
+if (args[1] === "+record-batch-create") data = {record_id_list:["recExample"]};
+process.stdout.write(JSON.stringify({ok:true,identity:"user",data}));
+`,
+      { mode: 0o700 },
+    );
+    const invalidParents = [
+      "not-url",
+      "http://example.feishu.cn/wiki/token",
+      "https://feishu.cn.evil.com/wiki/token",
+      "https://u:p@example.feishu.cn/wiki/token",
+      "https://example.feishu.cn/docx/token",
+    ];
+    for (const input of ["", ...invalidParents]) {
+      await assert.rejects(createTracker(input), /创建未开始.*知识库（Wiki）父页面链接/);
+    }
+    await assert.rejects(readFile(process.env.LARK_TEST_CALLS), { code: "ENOENT" });
+    const commands = new Map();
+    const sent = [];
+    const reported = [];
+    const hidden = [];
+    let failDispatch = false;
+    larkWorkloop({
+      registerCommand: (name, command) => commands.set(name, command),
+      on() {},
+      sendUserMessage: (...args) => {
+        assert.deepEqual(hidden.at(-1), {
+          customType: "lark-workloop-context",
+          content: context,
+          display: false,
+        });
+        if (failDispatch) throw new Error("private-dispatch-details");
+        sent.push(args);
+      },
+      sendMessage: (message, options) => {
+        assert.deepEqual(options, { triggerTurn: false });
+        (message.customType === "lark-workloop-context" ? hidden : reported).push(message);
+      },
+    });
+    const run = commands.get("lark-workloop").handler;
+    const idle = {
+      cwd: root,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      hasUI: true,
+      ui: { setStatus: () => assert.fail("Create must use the Skill interaction flow") },
+    };
+    const context = `\n\n[lark-workloop 当前会话]\n${JSON.stringify({ cwd: root })}`;
+    const inputs = [
+      "create",
+      `create ${parent} extra`,
+      ...invalidParents.map((url) => `create ${url}`),
+      `create ${parent}`,
+      `create "${parent}"`,
+    ];
+    for (const input of inputs) await run(`  ${input}  `, idle);
+    assert.deepEqual(
+      sent,
+      inputs.map((input) => [`/skill:lark-workloop ${input}`, { expandPromptTemplates: true }]),
+    );
+    assert.deepEqual(reported, []);
+    await run(`create ${parent}`, { ...idle, hasUI: false, ui: undefined });
+    assert.deepEqual(sent.at(-1), [
+      `/skill:lark-workloop create ${parent}`,
+      { expandPromptTemplates: true },
+    ]);
+    const sentCount = sent.length;
+    assert.equal(hidden.length, inputs.length + 1);
+    const hiddenCount = hidden.length;
+    for (const busy of [{ isIdle: () => false }, { hasPendingMessages: () => true }]) {
+      await run(`create ${parent}`, { ...idle, ...busy });
+      assert.equal(reported.at(-1).customType, "lark-workloop");
+      assert.match(reported.pop().content, /操作未开始：Agent 正忙/);
+    }
+    assert.equal(hidden.length, hiddenCount);
+    failDispatch = true;
+    await run(`create ${parent}`, idle);
+    assert.equal(reported.at(-1).customType, "lark-workloop");
+    assert.match(reported.at(-1).content, /分发未完成.*核对当前任务状态/s);
+    assert.doesNotMatch(reported.pop().content, /private-dispatch-details/);
+    assert.equal(sent.length, sentCount);
+    await assert.rejects(readFile(process.env.LARK_TEST_CALLS), { code: "ENOENT" });
+    const script = fileURLToPath(
+      new URL("../extensions/lark-workloop/scripts/create.ts", import.meta.url),
+    );
+    const result = JSON.parse(
+      (await exec(process.execPath, ["--experimental-strip-types", script, parent])).stdout,
+    );
+    assert.equal(result.status, "created");
+    assert.equal(result.url, "https://example.feishu.cn/wiki/newNode");
+    const calls = (await readFile(process.env.LARK_TEST_CALLS, "utf8"))
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.equal(calls.filter((args) => args[1] === "+base-create").length, 1);
+    const create = calls.find((args) => args[1] === "+base-create");
+    assert.deepEqual(JSON.parse(create[create.indexOf("--fields") + 1]), template.fields);
+    assert.equal(template.fields[0].name, "问题描述");
+    assert.equal(template.fields.length, 8);
+    assert.equal(Object.hasOwn(template, "form"), false);
+    assert.deepEqual(template.fields.find((field) => field.name === "优先级").default_value, [
+      "P1",
+    ]);
+    assert.equal(template.fields.find((field) => field.name === "当前状态").multiple, true);
+    assert.ok(calls.every((args) => args.includes("user") && !args.includes("--yes")));
+    assert.ok(
+      !calls.some(
+        (args) =>
+          args[0] === "auth" ||
+          args[1] === "+form-create" ||
+          /copy|delete/.test(args[1]) ||
+          (args[1].includes("record") && args[1] !== "+record-batch-create"),
+      ),
+    );
+    const seeds = calls.filter((args) => args[1] === "+record-batch-create");
+    assert.equal(seeds.length, 1);
+    assert.equal(calls.at(-1), seeds[0]);
+    assert.deepEqual(JSON.parse(seeds[0][seeds[0].indexOf("--json") + 1]), {
+      create_records: template.records,
+    });
+    assert.equal(template.records.length, 1);
+    assert.deepEqual(template.records[0].分组, ["待确认"]);
+    assert.equal(template.records[0].问题描述, "【示例】点击提交后未显示成功提示。");
+    assert.deepEqual(template.records[0].类型, []);
+    const move = calls.find((args) => args[1] === "+move");
+    assert.equal(move[move.indexOf("--target-parent-token") + 1], "parent123");
+    assert.deepEqual(
+      calls
+        .filter((args) => args[1] === "+view-set-group")
+        .map((args) => JSON.parse(args[args.indexOf("--json") + 1])),
+      template.views.filter((view) => view.group).map((view) => ({ group_config: view.group })),
+    );
+    assert.deepEqual(
+      calls
+        .filter((args) => args[1] === "+view-set-visible-fields")
+        .map((args) => JSON.parse(args[args.indexOf("--json") + 1]).visible_fields),
+      template.views.map((view) => view.visibleFields),
+    );
+    process.env.LARK_TEST_FAIL = "+record-batch-create";
+    await assert.rejects(createTracker(parent), (error) => {
+      assert.match(error.message, /base:record:create/);
+      assert.match(error.message, /已创建资源.*https:\/\/example.feishu.cn\/wiki\/newNode/);
+      assert.match(error.message, /不要直接重跑/);
+      assert.doesNotMatch(error.message, /secret-must-not-leak/);
+      return true;
+    });
+    process.env.LARK_TEST_FAIL = "malformed";
+    await assert.rejects(createTracker(parent), (error) => {
+      assert.match(error.message, /不是有效 JSON/);
+      assert.doesNotMatch(error.message, /secret-must-not-leak/);
+      return true;
+    });
+    process.env.LARK_TEST_FAIL = "pending-move";
+    await assert.rejects(createTracker(parent), /挂载尚未完成/);
+    let allCalls = (await readFile(process.env.LARK_TEST_CALLS, "utf8"))
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.equal(allCalls.at(-1)[1], "+move");
+    delete process.env.LARK_TEST_FAIL;
+    let checks = 0;
+    await assert.rejects(
+      createTracker(parent, () => ++checks < 4),
+      (error) => {
+        assert.match(error.message, /会话或任务已变化/);
+        assert.match(error.message, /https:\/\/example.feishu.cn\/base\/newBase/);
+        return true;
+      },
+    );
+    allCalls = (await readFile(process.env.LARK_TEST_CALLS, "utf8"))
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.equal(allCalls.at(-1)[1], "+base-create");
+    assert.deepEqual(reported, []);
+  } finally {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+// 在临时个人目录复用资源用例，验证绑定存储，不访问飞书或真实用户配置。
+async function verifyLarkBindings() {
+  const root = await mkdtemp(join(tmpdir(), "lark-bindings-"));
+  const saved = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  try {
+    const workspace = join(await realpath(root), "repo");
+    for (const project of ["apps/web", "apps/admin", "apps/moved"])
+      await mkdir(join(workspace, project), { recursive: true });
+    const script = fileURLToPath(
+      new URL("../extensions/lark-workloop/scripts/bindings.ts", import.meta.url),
+    );
+    const cli = (input) =>
+      new Promise((resolve, reject) => {
+        const child = execFile(
+          process.execPath,
+          ["--experimental-strip-types", script],
+          (error, stdout, stderr) => {
+            if (error) reject(Object.assign(error, { stderr }));
+            else resolve(JSON.parse(stdout));
+          },
+        );
+        child.stdin.end(typeof input === "string" ? input : JSON.stringify(input));
+      });
+    let current = await cli({ action: "read" });
+    assert.equal(current.status, "ready");
+    assert.deepEqual(current.bindings, []);
+    await assert.rejects(stat(bindingsPath()), { code: "ENOENT" });
+    const binding = {
+      baseToken: "baseA",
+      tableId: "tblA",
+      workspace,
+      project: "apps/web",
+      source: "inferred",
+      evidence: "apps/web/package.json 与实际路由确认归属",
+    };
+    const emptyRevision = current.revision;
+    current = await cli({ action: "save", expectedRevision: current.revision, binding });
+    assert.equal(current.status, "saved");
+    assert.equal(current.bindings.length, 1);
+    const webId = current.bindings[0].id;
+    assert.equal(current.bindings[0].workspace, workspace);
+    assert.equal(current.bindings[0].project, "apps/web");
+    assert.ok(Number.isFinite(current.bindings[0].updatedAt));
+    if (process.platform !== "win32")
+      assert.equal((await stat(bindingsPath())).mode & 0o777, 0o600);
+    current = await manageBindings({
+      action: "save",
+      expectedRevision: current.revision,
+      binding: { ...binding, evidence: "新增调用链证据" },
+    });
+    assert.equal(current.bindings.length, 1);
+    assert.equal(current.bindings[0].id, webId);
+    current = await manageBindings({
+      action: "save",
+      expectedRevision: current.revision,
+      binding: { ...binding, project: "apps/admin" },
+    });
+    const adminId = current.bindings[1].id;
+    current = await manageBindings({
+      action: "save",
+      expectedRevision: current.revision,
+      binding: { ...binding, tableId: "tblB" },
+    });
+    assert.equal(current.bindings.length, 3);
+    current = await manageBindings({
+      action: "save",
+      expectedRevision: current.revision,
+      binding: {
+        ...binding,
+        id: webId,
+        project: "apps/moved",
+        source: "user",
+        evidence: "用户确认项目已迁移",
+      },
+    });
+    assert.equal(current.bindings.length, 3);
+    assert.equal(current.bindings.find((item) => item.id === adminId).project, "apps/admin");
+    assert.equal(current.bindings.find((item) => item.id === webId).source, "user");
+    const before = await readFile(bindingsPath(), "utf8");
+    await assert.rejects(
+      manageBindings({ action: "save", expectedRevision: emptyRevision, binding }),
+      /绑定已变化/,
+    );
+    for (const invalid of [
+      { ...binding, workspace: "relative" },
+      { ...binding, project: "../outside" },
+      { ...binding, project: workspace },
+      { ...binding, workspace: join(root, "missing") },
+      { ...binding, evidence: " " },
+      { ...binding, tableId: "wikiToken" },
+      { ...binding, source: "guessed" },
+    ]) {
+      await assert.rejects(
+        manageBindings({ action: "save", expectedRevision: current.revision, binding: invalid }),
+        /保存未开始/,
+      );
+    }
+    await writeFile(join(workspace, "not-directory"), "text");
+    await assert.rejects(
+      manageBindings({
+        action: "save",
+        expectedRevision: current.revision,
+        binding: { ...binding, project: "not-directory" },
+      }),
+      /目录/,
+    );
+    if (process.platform !== "win32") {
+      await symlink(await realpath(root), join(workspace, "outside"), "dir");
+      await assert.rejects(
+        manageBindings({
+          action: "save",
+          expectedRevision: current.revision,
+          binding: { ...binding, project: "outside" },
+        }),
+        /越出工作区/,
+      );
+    }
+    await assert.rejects(
+      manageBindings({
+        action: "save",
+        expectedRevision: current.revision,
+        binding: { ...binding, id: webId, tableId: "tblOther" },
+      }),
+      /另一张表/,
+    );
+    await assert.rejects(
+      manageBindings({
+        action: "save",
+        expectedRevision: current.revision,
+        binding: { ...binding, id: webId, project: "apps/admin" },
+      }),
+      /关联已存在/,
+    );
+    await assert.rejects(manageBindings({ action: "remove", id: webId }), /expectedRevision/);
+    await writeFile(`${bindingsPath()}.lock`, "");
+    await assert.rejects(
+      manageBindings({ action: "save", expectedRevision: current.revision, binding }),
+      /绑定正在更新/,
+    );
+    await rm(`${bindingsPath()}.lock`);
+    assert.equal(await readFile(bindingsPath(), "utf8"), before);
+    const results = await Promise.allSettled(
+      ["first", "second"].map((evidence) =>
+        manageBindings({
+          action: "save",
+          expectedRevision: current.revision,
+          binding: { ...binding, evidence },
+        }),
+      ),
+    );
+    assert.equal(results.filter((item) => item.status === "fulfilled").length, 1);
+    assert.equal(results.filter((item) => item.status === "rejected").length, 1);
+    current = await manageBindings({ action: "read" });
+    assert.equal(current.bindings.length, 4);
+    await rm(join(workspace, "apps/moved"), { recursive: true });
+    current = await manageBindings({
+      action: "remove",
+      expectedRevision: current.revision,
+      id: webId,
+    });
+    assert.equal(current.status, "removed");
+    assert.ok(!current.bindings.some((item) => item.id === webId));
+    assert.ok(current.bindings.some((item) => item.id === adminId));
+    await assert.rejects(
+      manageBindings({ action: "remove", expectedRevision: current.revision, id: "missing" }),
+      /原绑定不存在/,
+    );
+    const preflight = fileURLToPath(
+      new URL("../extensions/lark-workloop/scripts/preflight.ts", import.meta.url),
+    );
+    await exec(process.execPath, ["--experimental-strip-types", preflight, "--invalidate"]);
+    assert.equal((await manageBindings({ action: "read" })).revision, current.revision);
+    assert.deepEqual(await readdir(join(root, "agent", "lark-workloop")), [
+      "workspace-bindings.json",
+    ]);
+    await assert.rejects(cli("not-json private-request"), (error) => {
+      assert.match(error.stderr, /stdin 必须为有效 JSON/);
+      assert.doesNotMatch(error.stderr, /private-request|SyntaxError|at main/);
+      return true;
+    });
+    for (const content of [
+      "not-json",
+      JSON.stringify({ version: 2, bindings: [] }),
+      JSON.stringify({ version: 1, bindings: [current.bindings[0], current.bindings[0]] }),
+    ]) {
+      await writeFile(bindingsPath(), content);
+      await assert.rejects(
+        manageBindings({ action: "save", expectedRevision: current.revision, binding }),
+        /损坏|格式不兼容/,
+      );
+      assert.equal(await readFile(bindingsPath(), "utf8"), content);
+    }
+    await rm(bindingsPath());
+    await mkdir(bindingsPath());
+    await assert.rejects(cli({ action: "read" }), (error) => {
+      assert.match(error.stderr, /个人数据目录权限/);
+      assert.doesNotMatch(error.stderr, /EISDIR|stack|private-request/);
+      return true;
+    });
+  } finally {
+    if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = saved;
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+// 校验包资源发现、技能快捷入口与路由调试的无副作用注册。
 test("package exposes the workflow and standalone route debugging stays inert", async () => {
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.ok(manifest.pi.extensions.includes("./extensions/gkd-workflow/index.ts"));
-  assert.deepEqual(manifest.pi.skills, ["./extensions/gkd-workflow/gkd-pr"]);
+  assert.deepEqual(manifest.pi.skills, [
+    "./extensions/gkd-workflow/gkd-pr",
+    "./extensions/lark-workloop",
+  ]);
+  assert.ok(manifest.pi.extensions.includes("./extensions/lark-workloop/index.ts"));
+  const larkDir = fileURLToPath(new URL("../extensions/lark-workloop/", import.meta.url));
+  const larkSkills = loadSkillsFromDir({ dir: larkDir, source: "path" });
+  assert.deepEqual(larkSkills.diagnostics, []);
+  assert.deepEqual(
+    larkSkills.skills.map((skill) => [skill.name, skill.filePath]),
+    [["lark-workloop", join(larkDir, "SKILL.md")]],
+  );
+  const larkSkill = await readFile(join(larkDir, "SKILL.md"), "utf8");
+  const checkFlow = await readFile(join(larkDir, "references/check.md"), "utf8");
+  const createFlow = await readFile(join(larkDir, "references/create.md"), "utf8");
+  assert.match(larkSkill, /命令前加 `\/lark-workloop`.*自然语言/);
+  assert.match(createFlow, /仅执行一次以下脚本/);
+  assert.match(createFlow, /必须且只能提供一个 Wiki 父页面 URL/);
+  assert.match(larkSkill, /创建成功后会尝试推断并记录项目关联/);
+  assert.match(createFlow, /建表成功后，加载.*bindings\.md.*当前主 Agent/);
+  assert.match(createFlow, /返回的 `baseToken`、`tableId`/);
+  assert.match(createFlow, /不把推断逻辑放进 `create\.ts`/);
+  assert.match(createFlow, /反馈首行为.*已创建漏洞跟踪记录/);
+  assert.match(createFlow, /绑定失败不改变建表成功的事实.*不重跑创建脚本/);
+  const workflow = await readFile(join(larkDir, "references/workflow.md"), "utf8");
+  assert.match(larkSkill, /确定操作前，不检查环境、读取授权缓存、访问飞书或业务项目，也不修改文件/);
+  assert.match(larkSkill, /未开始.*未完成.*已暂停/);
+  assert.match(larkSkill, /check.*references\/check\.md/);
+  assert.match(checkFlow, /--invalidate.*仅运行.*清缓存/);
+  assert.match(larkSkill, /串行执行/);
+  assert.match(checkFlow, /waiting_user/);
+  assert.match(larkSkill, /从未完成步骤恢复.*不重新执行已完成步骤/);
+  assert.match(checkFlow, /不读取问题表/);
+  assert.match(checkFlow, /返回调度计划/);
+  assert.match(larkSkill, /确定要做的事[\s\S]*读取对应说明[\s\S]*按说明执行/);
+  assert.match(larkSkill, /create <URL>.*references\/create\.md/);
+  assert.match(
+    larkSkill,
+    /work --larkurl <问题表URL> \[--workspace <工作区路径>\].*references\/workflow\.md/,
+  );
+  const bindings = await readFile(join(larkDir, "references/bindings.md"), "utf8");
+  assert.match(larkSkill, /管理项目关联.*references\/bindings\.md/);
+  assert.match(larkSkill, /项目关联只管理本地关联，不启动修复或写入飞书/);
+  assert.match(workflow, /当前 Agent 会话 cwd/);
+  assert.match(workflow, /scripts\/bindings.ts/);
+  assert.match(bindings, /baseToken \+ tableId/);
+  assert.match(bindings, /创建后的归属判断[\s\S]*当前 Agent 会话 cwd/);
+  assert.match(bindings, /不扩大到 cwd 外的仓库根，不跨符号链接边界/);
+  assert.match(bindings, /不能把示例数据当作真实项目证据/);
+  assert.match(bindings, /自动推断使用 `source: "inferred"`.*用户明确指定或确认.*`source: "user"`/);
+  assert.match(bindings, /不覆盖旧关联或把 user 降为 inferred/);
+  assert.match(bindings, /后续 work 仍结合具体问题核实，可补充其他子项目/);
+  assert.match(bindings, /告知表已创建并及时询问具体归属/);
+  assert.match(bindings, /只继续未完成的绑定步骤/);
+  assert.match(bindings, /view 只限制本轮范围/);
+  assert.match(bindings, /及时向用户发起具体确认提问/);
+  assert.match(bindings, /临时指定不能无条件覆盖/);
+  assert.match(larkSkill, /执行前核对完整请求.*缺少参数、参数不支持、目标不明或步骤冲突时先询问/);
+  assert.match(larkSkill, /不支持持续监听、自动多轮/);
+  assert.doesNotMatch(larkSkill, /process_once|目前仅支持/);
+  assert.match(workflow, /默认只执行一轮 loop/);
+  assert.match(
+    workflow,
+    /按 P0 → P1 → P2 → 未分级排序[\s\S]*### 2\. 评估复杂度并限定本轮任务[\s\S]*### 3\. 确认分类、阶段并及时回写/,
+  );
+  assert.match(workflow, /根据问题描述和已有验收要求估算工作量/);
+  assert.match(workflow, /复杂或不明确.*\|[ \t]+5[ \t]+\|/);
+  assert.match(workflow, /每轮预算最多 5 点、最多 5 条/);
+  assert.match(workflow, /从队首连续选取.*不能跳过它去挑后面的简单任务/);
+  assert.match(workflow, /不修改延期记录的类型、分组、状态或备注/);
+  assert.match(workflow, /本轮清单只减不增.*不从延期清单补位/);
+  assert.match(workflow, /停止领取后续任务，转入已尝试任务的统一验证和回写/);
+  assert.match(workflow, /未知参数/);
+  assert.match(workflow, /真实路径/);
+  assert.match(workflow, /必须存在可用的.*“类型”/);
+  assert.match(
+    workflow,
+    /待确认进入处理池时，必须在同一次记录更新中写入已确认的“类型”和当前阶段的“当前状态”/,
+  );
+  assert.match(workflow, /类型为空时必须填写/);
+  assert.match(workflow, /已有类型正确则保留，有冲突或无法判断时先问用户/);
+  assert.match(workflow, /简单且信息充分[\s\S]*直接写“待处理”/);
+  assert.match(workflow, /先写“待复现”[\s\S]*确认问题和方案后立即写“待处理”，写入成功后才修改/);
+  assert.match(workflow, /单元素数组替换/);
+  assert.match(workflow, /修复完成且必要验证充分：将“当前状态”替换为 `\["已修复"\]`/);
+  assert.match(workflow, /等待统一验证的记录保持“待处理”/);
+  assert.match(workflow, /不代表已验收、已提交或已部署/);
+  assert.match(workflow, /简单任务不写备注[\s\S]*本轮新增备注合计不超过 100 字/);
+  assert.match(workflow, /不写运行标识、时间、工作区、分支、命令日志/);
+  assert.match(workflow, /保留旧备注，不自动清理历史日志/);
+  assert.match(workflow, /本次预期字段值核对是否已落地/);
+  assert.match(workflow, /整轮共享/);
+  assert.match(workflow, /不自动重做/);
+  assert.match(workflow, /超时.*不重放/);
+  assert.doesNotMatch(
+    workflow,
+    /尚未注册|不写入“当前状态”|都不写“已修复”|安全追加规则|结论：待验收 \/ 受阻/,
+  );
+  await verifyLarkPreflight();
+  await verifyLarkCreate();
+  await verifyLarkBindings();
   assert.ok(manifest.files.includes("extensions"));
   const skillDir = fileURLToPath(new URL("../extensions/gkd-workflow/gkd-pr/", import.meta.url));
   const discovered = loadSkillsFromDir({ dir: skillDir, source: "path" });

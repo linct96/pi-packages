@@ -1,0 +1,107 @@
+{
+  "tableName": "漏洞跟踪记录",
+  "fields": [
+    { "name": "问题描述", "type": "text", "style": { "type": "plain" } },
+    {
+      "name": "类型",
+      "type": "select",
+      "multiple": false,
+      "options": [
+        { "name": "BUG", "hue": "Blue", "lightness": "Lighter" },
+        { "name": "优化", "hue": "Wathet", "lightness": "Lighter" },
+        { "name": "需求", "hue": "Orange", "lightness": "Lighter" }
+      ]
+    },
+    { "name": "log/截图", "type": "attachment" },
+    {
+      "name": "优先级",
+      "type": "select",
+      "multiple": false,
+      "default_value": ["P1"],
+      "options": [
+        { "name": "P0", "hue": "Blue", "lightness": "Lighter" },
+        { "name": "P1", "hue": "Orange", "lightness": "Lighter" },
+        { "name": "P2", "hue": "Wathet", "lightness": "Lighter" }
+      ]
+    },
+    { "name": "是否交付于AI", "type": "checkbox" },
+    {
+      "name": "分组",
+      "type": "select",
+      "multiple": false,
+      "options": [
+        { "name": "待确认", "hue": "Wathet", "lightness": "Lighter" },
+        { "name": "处理池", "hue": "Red", "lightness": "Lighter" },
+        { "name": "需要决策", "hue": "Turquoise", "lightness": "Lighter" },
+        { "name": "已归档", "hue": "Yellow", "lightness": "Lighter" }
+      ]
+    },
+    {
+      "name": "当前状态",
+      "type": "select",
+      "multiple": true,
+      "options": [
+        { "name": "待复现", "hue": "Wathet", "lightness": "Lighter" },
+        { "name": "待处理", "hue": "Orange", "lightness": "Lighter" },
+        { "name": "已修复", "hue": "Yellow", "lightness": "Lighter" }
+      ]
+    },
+    { "name": "备注说明", "type": "text", "style": { "type": "plain" } }
+  ],
+  "records": [
+    {
+      "问题描述": "【示例】点击提交后未显示成功提示。",
+      "分组": ["待确认"],
+      "类型": [],
+      "优先级": ["P1"],
+      "是否交付于AI": false,
+      "当前状态": [],
+      "备注说明": ""
+    }
+  ],
+  "views": [
+    {
+      "name": "漏洞分类",
+      "type": "grid",
+      "group": [{ "field": "分组", "desc": false }],
+      "visibleFields": [
+        "问题描述",
+        "分组",
+        "类型",
+        "log/截图",
+        "优先级",
+        "是否交付于AI",
+        "当前状态",
+        "备注说明"
+      ]
+    },
+    {
+      "name": "优先级看板",
+      "type": "kanban",
+      "group": [{ "field": "优先级", "desc": false }],
+      "visibleFields": [
+        "问题描述",
+        "优先级",
+        "当前状态",
+        "log/截图",
+        "备注说明",
+        "是否交付于AI",
+        "类型"
+      ]
+    },
+    {
+      "name": "所有记录",
+      "type": "grid",
+      "visibleFields": [
+        "问题描述",
+        "分组",
+        "优先级",
+        "当前状态",
+        "log/截图",
+        "备注说明",
+        "是否交付于AI",
+        "类型"
+      ]
+    }
+  ]
+}
