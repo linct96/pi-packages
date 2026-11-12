@@ -383,7 +383,6 @@ test("NONE/DIRECT exit development control and routing failures block instead of
     const app = harness(await project());
     await app.commands.get("gkd-workloop").handler("ordinary request", app.ctx);
     await app.invoke("gkd_workloop_start", { kind: "development" });
-    await app.event("agent_settled", { aborted: false });
     const raw = rawRoute();
     raw.intent = operation ? "operation" : "non_development";
     raw.route = operation ? "DIRECT" : "NONE";
@@ -396,7 +395,6 @@ test("NONE/DIRECT exit development control and routing failures block instead of
   const app = harness(await project());
   await app.commands.get("gkd-workloop").handler("task", app.ctx);
   await app.invoke("gkd_workloop_start", { kind: "development" });
-  await app.event("agent_settled", { aborted: false });
   await app.invoke("gkd_judge_route", { response: "invalid" });
   assert.equal(app.state().phase, "BLOCKED");
   await app.event("agent_settled");
