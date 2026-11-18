@@ -172,18 +172,20 @@ export function createFooterStatus(
         ? ` • ${singleLine(thinking === "off" ? "thinking off" : thinking)}`
         : "";
       const modelInfo = modelId + thinkingInfo;
+      const subscription =
+        model && (model.provider === "kimi-coding" || ctx.modelRegistry.isUsingOAuth(model));
       const provider = model
         ? singleLine(
             model.provider === "openai-codex"
               ? "sub"
               : model.provider === "openai"
-                ? "api"
+                ? subscription
+                  ? "siwc"
+                  : "api"
                 : model.provider,
           )
         : "";
       const modelWithProvider = modelId + (provider ? ` (${provider})` : "") + thinkingInfo;
-      const subscription =
-        model && (model.provider === "kimi-coding" || ctx.modelRegistry.isUsingOAuth(model));
       const cost = totals.cost || subscription ? `$${totals.cost.toFixed(3)}` : "";
       const usage = ctx.getContextUsage();
       const percent = usage?.percent;
