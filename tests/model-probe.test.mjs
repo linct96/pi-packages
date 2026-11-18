@@ -44,11 +44,14 @@ const { fauxProvider, fauxAssistantMessage } = await import(
 const { getCurrentTools, getCurrentSystemPrompt } = await import(
   new URL("../../pi-ai/dist/index.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
 );
-const config = (questions = [{ id: "one", question: "Question one?", answer: "ＡＢＣ" }]) => ({
+const config = (
+  questions = [{ id: "one", question: "Question one?", answer: "ＡＢＣ" }],
+  models = ["gpt-6.2-sol"],
+) => ({
   ...parseProbeConfig(undefined),
   enabled: true,
   maxAttempts: 1, // Most cases exercise the manual failure gate without automatic restarts.
-  questions,
+  questions: questions.map((q) => ({ models, ...q })),
 });
 const stateOf = (manager) =>
   manager.getBranch().findLast((e) => e.type === "custom" && e.customType === PROBE_ENTRY)?.data;
@@ -71,15 +74,23 @@ test("configuration and local Unicode/whitespace contains validation", () => {
   assert.equal(parseProbeConfig(undefined).enabled, false);
   assert.equal(parseProbeConfig(undefined).maxAttempts, 3);
   assert.equal(parseProbeConfig({ enabled: true }).maxAttempts, 3);
+  assert.deepEqual(
+    parseProbeConfig({ enabled: true }).questions,
+    parseProbeConfig(undefined).questions,
+  );
+  assert.equal(parseProbeConfig({ enabled: true }).questions.length > 0, true);
+  const noQuestions = parseProbeConfig({ enabled: true, questions: [] });
+  assert.equal(noQuestions.enabled, false);
+  assert.deepEqual(noQuestions.questions, []);
   assert.equal(parseProbeConfig({ enabled: true, maxAttempts: 1 }).maxAttempts, 1);
   assert.equal(parseProbeConfig({ enabled: true, maxAttempts: 5 }).maxAttempts, 5);
-  assert.deepEqual(parseProbeConfig(undefined).models, ["gpt-6.1-sol"]);
-  assert.deepEqual(parseProbeConfig({ enabled: true, models: [] }).models, []);
-  assert.deepEqual(
-    parseProbeConfig({ enabled: true, models: ["gpt-6.1-sol", " extra-model "] }).models,
-    ["gpt-6.1-sol", "extra-model"],
-  );
+  assert.deepEqual(parseProbeConfig(undefined).questions[0].models, ["gpt-6.2-sol"]);
   const q = config().questions[0];
+  assert.deepEqual(
+    parseProbeConfig({ enabled: true, questions: [{ ...q, models: ["one", " two "] }] })
+      .questions[0].models,
+    ["one", "two"],
+  );
   assert.equal(validateAnswer(q, "Answer: A B\nC.").passed, true);
   assert.equal(validateAnswer(q, "wrong").reason, "answer_mismatch");
   assert.equal(validateAnswer(q, "").reason, "empty_answer");
@@ -91,9 +102,13 @@ test("configuration and local Unicode/whitespace contains validation", () => {
       enabled: true,
       maxAttempts,
     })),
-    ...[null, "gpt-6.1-sol", {}, [null], [1], [" "]].map((models) => ({ enabled: true, models })),
-    { enabled: true, questions: [] },
-    { enabled: true, questions: [{ id: "a", question: "?", answer: " " }] },
+    { enabled: true, models: ["gpt-6.2-sol"] },
+    { enabled: true, questions: null },
+    { enabled: true, questions: [{ ...q, answer: " " }] },
+    ...[undefined, null, "one", {}, [], [null], [1], [" "]].map((models) => ({
+      enabled: true,
+      questions: [{ ...q, models }],
+    })),
     { ...config(), questions: [q, q] },
     { ...config(), validation: { mode: "exact", requireAll: true } },
     { ...config(), isolation: { disableTools: false, clearSystemPrompt: true } },
@@ -107,9 +122,8 @@ test("whole-file settings conflicts preserve custom questions and unknown fields
   const original = {
     fast: false,
     modelProbe: {
-      ...config(),
+      ...config(undefined, ["gpt-6.1-sol", "extra-model"]),
       maxAttempts: 5,
-      models: ["gpt-6.1-sol", "extra-model"],
       custom: "keep",
     },
     unknown: { nested: true },
@@ -142,6 +156,14 @@ test("whole-file settings conflicts preserve custom questions and unknown fields
     /changed on disk/,
   );
   assert.equal((await readSettings(path)).unknown, "external edit");
+
+  const newPath = join(await directory(t), "settings.json");
+  const savedDefault = await saveSettings(newPath, false, false, new AbortController().signal, {
+    enabled: true,
+    expectedSettings: await readSettings(newPath),
+  });
+  assert.deepEqual(savedDefault.modelProbe, { enabled: true });
+  assert.deepEqual((await readSettings(newPath)).modelProbe, { enabled: true });
 });
 
 test("native settings menu toggles Probe independently and saves both values", async () => {
@@ -217,7 +239,7 @@ async function harness(t, settings = config(), entries = []) {
     mode: "tui",
     hasUI: true,
     thinkingLevel: "high",
-    model: { provider: "test", api: "test", id: "gpt-6.1-sol" },
+    model: { provider: "test", api: "test", id: "gpt-6.2-sol" },
     sessionManager: {
       getBranch: () => branch,
       getEntries: () => branch,
@@ -352,13 +374,12 @@ test("Model Probe footer follows its session toggle and restores independently o
 });
 
 test("ordered multi-question probe, pending image handoff, and at-most-once delivery", async (t) => {
-  const h = await harness(
-    t,
-    config([
-      { id: "one", question: "Q1", answer: "yes" },
-      { id: "two", question: "Q2", answer: "two" },
-    ]),
-  );
+  const settings = config([
+    { id: "one", question: "Q1", answer: "yes" },
+    { id: "other", question: "Other model only", answer: "other", models: ["other-model"] },
+    { id: "two", question: "Q2", answer: "two", models: ["gpt-6.2-sol", "other-model"] },
+  ]);
+  const h = await harness(t, settings);
   assert.equal(h.sends.length, 0, "a new session makes no requests before the first input");
   assert.equal(h.state, undefined);
   assert.deepEqual(await h.first("fix login", [image]), { action: "handled" });
@@ -390,6 +411,19 @@ test("ordered multi-question probe, pending image handoff, and at-most-once deli
   assert.equal(h.sends.length, count);
   assert.equal(h.state.phase, "READY");
   assert.equal(await h.emit("input", { text: "normal", source: "interactive" }), undefined);
+
+  const other = await harness(t, settings);
+  other.ctx.model.id = "other-model";
+  await other.emit("model_select");
+  await other.first();
+  assert.equal(other.sends[0].content, "Other model only");
+  await other.startAnswer("other");
+  await other.emit("agent_settled", { aborted: false });
+  assert.equal(other.sends[1].content, "Q2");
+  assert.deepEqual(
+    other.state.config.questions.map((q) => q.id),
+    ["other", "two"],
+  );
 });
 
 test("probe panels track failure, restore without resending and distinguish explicit overrides", async (t) => {
@@ -464,7 +498,7 @@ test("first-input trigger honors the model allowlist and session toggle and igno
   for (const mode of ["tui", "rpc", "print", "json"]) {
     const skipped = await harness(t, { enabled: true });
     skipped.ctx.mode = mode;
-    skipped.ctx.model.id = "gpt-6.1-sol-extra";
+    skipped.ctx.model.id = mode === "tui" ? "gpt-6.1-sol" : "gpt-6.2-sol-extra";
     await skipped.emit("model_select");
     assert.equal(await skipped.first("ordinary task", [image]), undefined);
     assert.equal(await skipped.emit("tool_call"), undefined);
@@ -472,7 +506,7 @@ test("first-input trigger honors the model allowlist and session toggle and igno
     assert.equal(skipped.ctx.aborts, 0);
     assert.equal(skipped.sends.length, 0);
     assert.equal(skipped.state, undefined);
-    skipped.ctx.model.id = "gpt-6.1-sol";
+    skipped.ctx.model.id = "gpt-6.2-sol";
     await skipped.emit("model_select");
     assert.equal(
       (await skipped.first()).action,
@@ -485,7 +519,7 @@ test("first-input trigger honors the model allowlist and session toggle and igno
   old.ctx.model.id = "unlisted";
   await old.emit("model_select");
   old.entries.push({ type: "message", message: { role: "user", content: "already executed" } });
-  old.ctx.model.id = "gpt-6.1-sol";
+  old.ctx.model.id = "gpt-6.2-sol";
   await old.emit("model_select");
   assert.equal(
     await old.first(),
@@ -494,10 +528,16 @@ test("first-input trigger honors the model allowlist and session toggle and igno
   );
   assert.equal(old.sends.length, 0);
 
-  const empty = await harness(t, { ...config(), models: [] });
-  assert.equal(await empty.first(), undefined);
-  assert.equal(await empty.emit("tool_call"), undefined);
-  assert.equal(empty.sends.length, 0);
+  const noQuestions = await harness(t, config([]), [
+    { type: "custom", customType: `${PROBE_ENTRY}:setting`, data: { enabled: true } },
+  ]);
+  assert.equal(noQuestions.probe.enabled, false);
+  assert.equal(noQuestions.statuses.has(PROBE_ENTRY), false);
+  assert.throws(() => noQuestions.probe.setEnabled(true, noQuestions.ctx), /empty questions array/);
+  assert.equal(await noQuestions.first(), undefined);
+  assert.equal(await noQuestions.emit("tool_call"), undefined);
+  assert.equal(noQuestions.sends.length, 0);
+  assert.equal(noQuestions.state, undefined);
 
   const switched = await harness(t);
   await switched.first("must not replay", [image]);
@@ -517,16 +557,15 @@ test("first-input trigger honors the model allowlist and session toggle and igno
     assert.equal(switched.sends.length, count);
     assert.equal(switched.state.pendingMessage.text, "must not replay");
   }
-  switched.ctx.model.id = "gpt-6.1-sol";
+  switched.ctx.model.id = "gpt-6.2-sol";
   await switched.emit("model_select");
   assert.equal(switched.state.phase, "FAILED", "switching back does not bypass a prior gate");
   assert.equal((await switched.emit("tool_call")).block, true);
   assert.equal(switched.sends.length, count);
 
   const h = await harness(t, {
-    ...config(),
+    ...config(undefined, ["gpt-6.2-sol", "selected-before-first-input"]),
     enabled: false,
-    models: ["gpt-6.1-sol", "selected-before-first-input"],
   });
   h.probe.setEnabled(true, h.ctx);
   assert.equal(h.sends.length, 0);
@@ -884,7 +923,7 @@ async function sdk(
     provider: "openai-codex",
     tokensPerSecond: 100000,
     models: [
-      { id: "gpt-6.1-sol", reasoning: !!replacementSelection },
+      { id: "gpt-6.2-sol", reasoning: !!replacementSelection },
       ...(replacementSelection ? [{ id: replacementSelection.id, reasoning: true }] : []),
     ],
   });
@@ -1083,7 +1122,7 @@ test(
     assert.ok(h.runtime.session.getActiveToolNames().includes("write"));
 
     const unlisted = await sdk(t, {
-      probeConfig: { ...config(), models: ["another-model-id"] },
+      probeConfig: config(undefined, ["another-model-id"]),
       responses: [
         (context) => {
           assert.match(getCurrentSystemPrompt(context.messages), /LATE BUSINESS SYSTEM SECRET/);
@@ -1195,7 +1234,7 @@ test(
         assert.equal(session.model.provider, "openai-codex");
         assert.equal(
           session.model.id,
-          "gpt-6.1-sol",
+          "gpt-6.2-sol",
           "never probe or deliver on the fallback model",
         );
         assert.equal(
@@ -1205,7 +1244,7 @@ test(
         );
         assert.equal(
           state.model,
-          JSON.stringify(["openai-codex", "gpt-6.1-sol", session.model.api, "high"]),
+          JSON.stringify(["openai-codex", "gpt-6.2-sol", session.model.api, "high"]),
         );
         assert.equal(state.pendingMessage.text, "fix login");
         assert.equal(
@@ -1434,7 +1473,7 @@ test(
     });
     const h = await sdk(t, {
       serialized: true,
-      probeConfig: { ...config(), models: ["probe-model"] },
+      probeConfig: config(undefined, ["probe-model"]),
     });
     assert.equal(wire.length, 0);
     await h.first("normal");

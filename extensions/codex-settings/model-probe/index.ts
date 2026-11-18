@@ -95,8 +95,9 @@ const hasConversation = (ctx: ExtensionContext) =>
 export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
   let state: ProbeState | undefined;
   let pendingConfig: ProbeConfig | undefined;
-  let models = parseProbeConfig(undefined).models;
-  const applies = (ctx: ExtensionContext) => !!ctx.model && models.includes(ctx.model.id);
+  let questions = parseProbeConfig(undefined).questions;
+  const applies = (ctx: ExtensionContext) =>
+    questions.some((q) => q.models.includes(ctx.model?.id ?? ""));
   let enabled = false;
   let loading = true;
   let fault = false;
@@ -361,7 +362,7 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       config = parseProbeConfig((await readSettings(settingsPath)).modelProbe);
       if (!current(ctx, version)) return;
       enabled = config.enabled;
-      models = config.models;
+      questions = config.questions;
     } catch (error) {
       if (!current(ctx, version)) return;
       loading = false;
@@ -369,6 +370,11 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       enabled = false;
       updateStatus(ctx);
       notify(ctx, `配置无效，未执行检测或正常任务：${errorText(error)}`, true);
+      return;
+    }
+    if (questions.length === 0) {
+      loading = false;
+      updateStatus(ctx);
       return;
     }
     const branch = ctx.sessionManager.getBranch();
@@ -386,7 +392,6 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       typeof (setting.data as { enabled?: unknown })?.enabled === "boolean"
     )
       enabled = (setting.data as { enabled: boolean }).enabled;
-    config = { ...config, enabled };
     updateStatus(ctx);
     const conversation = hasConversation(ctx);
     if (!stored && handoff?.type === "custom") {
@@ -435,7 +440,9 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
     }
     loading = false;
     // Out-of-scope models neither resume probes nor replay their pending tasks.
-    if (!applies(ctx)) return;
+    const matchingQuestions = questions.filter((q) => q.models.includes(ctx.model?.id ?? ""));
+    if (!matchingQuestions.length) return;
+    config = { ...config, enabled, questions: matchingQuestions };
     if (stored?.type === "custom") {
       try {
         const saved = stored.data as ProbeState;
@@ -848,6 +855,8 @@ export function createModelProbe(pi: ExtensionAPI, settingsPath: string) {
       return enabled;
     },
     setEnabled(value: boolean, ctx: ExtensionContext) {
+      if (value && questions.length === 0)
+        throw new Error("Model Probe: remove the empty questions array or add a custom question.");
       pi.appendEntry(`${PROBE_ENTRY}:setting`, { enabled: value });
       enabled = value;
       updateStatus(ctx);

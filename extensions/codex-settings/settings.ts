@@ -75,7 +75,7 @@ export async function saveSettings(
     if (probe) {
       const existing = current.settings.modelProbe;
       updated.modelProbe = {
-        ...(existing && typeof existing === "object" ? existing : parseProbeConfig(undefined)),
+        ...(existing && typeof existing === "object" ? existing : {}),
         enabled: probe.enabled,
       };
     }
