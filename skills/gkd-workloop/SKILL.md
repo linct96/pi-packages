@@ -1,5 +1,6 @@
 ---
 name: gkd-workloop
+disable-model-invocation: true
 description: 在用户明确要求执行开发任务或飞书/Lark 问题表操作时使用，支持 Bug 修复、功能开发、飞书授权检查、问题表创建和项目绑定。飞书分支必须有明确来源（飞书/Lark 描述、可核实的资源链接或 check-lark/create-lark-table 命令）；普通“文档、表格、Wiki”或通用路径不触发，也不接管普通云文档读写。解释、咨询、评审和预览不启动执行。
 ---
 
